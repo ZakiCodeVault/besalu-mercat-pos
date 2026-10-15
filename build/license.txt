@@ -1,0 +1,20 @@
+Besalu Mercat POS - Terminos de uso
+
+Este programa es el sistema de punto de venta de Besalu Mercat, para uso
+interno del negocio.
+
+1. Licencia. Se concede una licencia de uso al titular del negocio. No se
+   permite redistribuir, revender ni publicar el programa sin autorizacion.
+
+2. Datos. La informacion de ventas, inventario, clientes y ajustes se guarda
+   localmente en esta computadora (carpeta de datos del usuario de Windows).
+   Respaldar esa informacion es responsabilidad del usuario; la aplicacion
+   incluye una opcion de "Respaldo JSON" en Ajustes.
+
+3. Actualizaciones. La aplicacion puede buscar e instalar actualizaciones
+   automaticamente desde su repositorio oficial de distribucion.
+
+4. Garantia. El programa se entrega "tal cual", sin garantias de ningun tipo.
+   El titular es responsable del cumplimiento de sus obligaciones tributarias.
+
+Al continuar con la instalacion aceptas estos terminos.
