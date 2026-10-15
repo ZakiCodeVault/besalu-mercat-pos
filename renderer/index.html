@@ -267,23 +267,11 @@ tbody tr:last-child td{border-bottom:none;} tbody tr{transition:background .12s;
 
 
 <div class="bg" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-<div id="login">
-  <div class="login-card glass">
-    <div class="logo-lockup"><span class="crest" id="lm1"></span><div class="logo-word">BESALÚ</div><div class="logo-ribbon">MERCAT</div><div class="logo-sub">MINIMARKET GOURMET</div></div>
-    <div class="campo"><label for="lg-mail">Correo</label><input id="lg-mail" value="caja@besalu.cr"></div>
-    <div class="campo"><label for="lg-pass">Contraseña</label><input id="lg-pass" type="password" value="········"></div>
-    <button class="btn btn--accent btn--block btn--lg" onclick="entrar()">Ingresar</button>
-  </div>
-</div>
 
 <div id="app" hidden>
   <aside class="rail glass">
-    <div class="brand"><span class="crest" id="lm2"></span><div class="bt"><span class="b1">Besalú</span><span class="b2">MERCAT</span></div></div>
+    <div class="brand"><div class="bt"><span class="b1">Besalú</span><span class="b2">MERCAT</span></div></div>
     <nav class="nav" id="nav"></nav>
-    <div class="rail-foot">
-      <div class="user-chip"><div class="avatar">B</div><div><div class="u-nom">Besalú Mercat</div><div class="u-mail" id="u-mail">caja@besalu.cr</div></div></div>
-      <button class="salir" onclick="salir()">Cerrar sesión</button>
-    </div>
   </aside>
   <main class="main">
     <div class="topbar glass">
@@ -374,7 +362,7 @@ function areaChart(data,labels){var w=620,h=176,pl=10,pr=10,pt=16,pb=24,iw=w-pl-
 
 const KEY='besalu_pos_v1';
 let DB=null;
-function save(){try{localStorage.setItem(KEY,JSON.stringify(DB));}catch(e){}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(DB));}catch(e){}if(window.BESALU&&BESALU.db){try{BESALU.db.save(DB);}catch(e){}}}
 function load(){try{const r=localStorage.getItem(KEY);return r?JSON.parse(r):null;}catch(e){return null;}}
 function ivaBase(precio,iva){const b=precio/(1+iva/100);return {base:b,imp:precio-b};}
 function mkSale(items,metodo,folio,ts,pago,sed,cli){
@@ -399,17 +387,7 @@ function seed(){
    ['7441011200118','Papel higiénico 4u',13,2450,1780,19,''],
    ['7441012300125','Jabón en polvo 1kg',13,2990,2150,22,'']
   ].map((r,i)=>({id:i+1,cod:r[0],nom:r[1],iva:r[2],precio:r[3],costo:r[4],stock:r[5],vence:r[6],cabys:''}));
-  const sed={sucursal:'001',terminal:'00001'};
-  const sales=[]; let folio=1000; const mets=['efectivo','efectivo','efectivo','tarjeta','tarjeta','sinpe'];
-  for(let dd=14;dd>=1;dd--){
-    const base=Date.now()-dd*86400000; const nv=6+Math.floor(Math.random()*7);
-    for(let k=0;k<nv;k++){
-      const ts=base+(8+Math.floor(Math.random()*11))*3600000+Math.floor(Math.random()*3600000);
-      const nit=1+Math.floor(Math.random()*4); const items=[];
-      for(let j=0;j<nit;j++){const pr=P[Math.floor(Math.random()*P.length)];items.push({cod:pr.cod,nom:pr.nom,precio:pr.precio,iva:pr.iva,cant:1+Math.floor(Math.random()*3)});}
-      sales.push(mkSale(items,mets[Math.floor(Math.random()*mets.length)],++folio,ts,0,sed));
-    }
-  }
+  const sales=[]; let folio=1042;
   return {products:P,sales,seq:{folio},archivo:[],shift:{open:false},
     settings:{negocio:'Besalú Mercat',cedula:'3-101-000000',sucursal:'001',terminal:'00001',moneda:'₡ colones',ivaIncl:true,ivaDefault:13,stockMin:5,venceDias:15,correoDuena:'dueña@besalu.cr',cierreDiario:true,horaCierre:'22:00',cierreMensual:true,impresora:'EPSON TM-T20 (USB)',ticket:'80 mm',imprimirAlCobrar:true,pieTicket:'¡Gracias por su compra!',prov:'Alanube',ambiente:'Pruebas (sandbox)'}};
 }
@@ -418,9 +396,15 @@ const state={vista:'caja',cart:[],metodo:'efectivo',cliente:null};
 const METODOS={efectivo:'cash',tarjeta:'card',sinpe:'phone'};
 const METLBL={efectivo:'Efectivo',tarjeta:'Tarjeta',sinpe:'SINPE'};
 
-function boot(){DB=load();if(!DB){DB=seed();save();}}
-function entrar(){$('#login').hidden=true;$('#app').hidden=false;$('#u-mail').textContent=$('#lg-mail').value||'caja@besalu.cr';$('#lm2').innerHTML=crest(30);buildNav();updShiftPill();go('caja');tick();}
-function salir(){$('#app').hidden=true;$('#login').hidden=false;state.cart=[];state.done=null;}
+async function loadDB(){
+  var d=null;
+  if(window.BESALU&&BESALU.db){try{d=await BESALU.db.load();}catch(e){}}
+  if(d&&((d.products&&d.products.length)||(d.sales&&d.sales.length))){if(!d.settings)d.settings=seed().settings;if(!d.seq)d.seq={folio:1042};if(!d.shift)d.shift={open:false};if(!d.archivo)d.archivo=[];return d;}
+  var ls=load();
+  if(ls){if(window.BESALU&&BESALU.db){try{BESALU.db.save(ls);}catch(e){}}return ls;}
+  var s=seed();if(window.BESALU&&BESALU.db){try{BESALU.db.save(s);}catch(e){}}return s;
+}
+async function init(){DB=await loadDB();var a=document.getElementById('app');if(a)a.hidden=false;buildNav();updShiftPill();go('caja');tick();}
 const NAV=[{v:'caja',ic:'receipt',t:'Caja'},{v:'ventas',ic:'history',t:'Ventas'},{v:'inventario',ic:'box',t:'Inventario'},{v:'reportes',ic:'chart',t:'Reportes'},{v:'cierre',ic:'wallet',t:'Cierre'},{v:'ajustes',ic:'sliders',t:'Ajustes'}];
 const TIT={caja:'Caja',ventas:'Ventas',inventario:'Inventario',reportes:'Reportes',cierre:'Cierre de caja',ajustes:'Ajustes'};
 function buildNav(){const nav=$('#nav');nav.innerHTML='';NAV.forEach(n=>{const b=el('button',{class:'nav-btn',onclick:()=>go(n.v)},[icon(n.ic,19),el('span',{class:'t',text:n.t})]);b.dataset.v=n.v;if(n.v==='inventario'){const l=lowStock().length+porVencer().length;if(l)b.appendChild(el('span',{class:'badge',text:String(l)}));}nav.appendChild(b);});}
@@ -758,8 +742,7 @@ function modalEliminar(p){
   abrirModal(m);
 }
 
-boot();
-$('#lm1').innerHTML=crest(84);
+init();
 setInterval(tick,1000);
 </script>
 
@@ -773,8 +756,6 @@ setInterval(tick,1000);
 
 
 <script>
-/* Integracion de actualizaciones: solo corre dentro de la app de escritorio
-   (cuando existe window.BESALU, inyectado por preload.js). En el navegador no hace nada. */
 (function(){
   if(!window.BESALU||!BESALU.updates)return;
   var up=document.getElementById('upd'),ic=document.getElementById('upd-ic'),t=document.getElementById('upd-t'),s=document.getElementById('upd-s'),act=document.getElementById('upd-act'),bar=document.getElementById('upd-bar'),ibar=document.getElementById('upd-i');
@@ -797,7 +778,6 @@ setInterval(tick,1000);
     } else if(d.state==='none'){ if(manual){manual=false; if(window.toast)toast('Ya tenes la ultima version'); } }
     else if(d.state==='error'){ if(manual){manual=false; if(window.toast)toast('No se pudo buscar actualizaciones','err'); } }
   });
-  // Tarjeta "Acerca de" dentro de Ajustes
   var vEl=document.getElementById('v-ajustes');
   if(vEl)new MutationObserver(inject).observe(vEl,{childList:true});
   function inject(){

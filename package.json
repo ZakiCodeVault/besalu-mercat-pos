@@ -1,7 +1,7 @@
 {
   "name": "besalu-mercat-pos",
   "productName": "Besalu Mercat POS",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Punto de venta Besalu Mercat (local, Windows)",
   "author": "Besalu Mercat",
   "license": "UNLICENSED",
@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "electron-log": "^5.2.0",
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "node-sqlite3-wasm": "^0.8.60"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -24,6 +25,7 @@
     "productName": "Besalu Mercat POS",
     "directories": { "output": "dist" },
     "files": [ "main.js", "preload.js", "renderer/**/*", "package.json" ],
+    "asarUnpack": [ "**/node_modules/node-sqlite3-wasm/**" ],
     "publish": [
       { "provider": "github", "owner": "ZakiCodeVault", "repo": "besalu-mercat-pos" }
     ],
