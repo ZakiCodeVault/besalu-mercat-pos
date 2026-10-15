@@ -291,7 +291,6 @@ tbody tr:last-child td{border-bottom:none;} tbody tr{transition:background .12s;
 </div>
 <div id="toasts"></div>
 <div id="modalRoot"></div>
-<div class="tag">Prototipo funcional · datos en este navegador</div>
 
 <script>
 const SVG={
@@ -373,20 +372,7 @@ function mkSale(items,metodo,folio,ts,pago,sed,cli){
   return {folio,cons,ts,items,metodo,total,base,imp,byRate,pago:pago||total,cambio:Math.max(0,(pago||total)-total),anulada:false,cliente:cli||null};
 }
 function seed(){
-  const P=[
-   ['7441001100118','Leche Dos Pinos 1L',1,1250,980,42,'2026-10-20'],
-   ['7441002200125','Arroz Tío Pelón 1kg',1,1490,1120,60,'2027-06-01'],
-   ['7441003300132','Frijol negro 900g',1,1690,1290,28,'2027-05-01'],
-   ['7441004400149','Pan cuadrado Bimbo',1,1875,1450,15,'2026-10-13'],
-   ['7441005500156','Huevos 15 unid',1,2350,1850,4,'2026-10-11'],
-   ['7441006600163','Aceite Numar 900ml',1,2190,1700,33,'2027-08-01'],
-   ['7441007700170','Azúcar 1kg',1,990,720,70,'2028-01-01'],
-   ['7441008800187','Café Rey 500g',13,3650,2650,24,'2027-03-01'],
-   ['7441009900194','Atún Sardimar 140g',13,1350,990,48,'2028-02-01'],
-   ['7441010100101','Coca-Cola 2L',13,1690,1200,54,'2026-12-15'],
-   ['7441011200118','Papel higiénico 4u',13,2450,1780,19,''],
-   ['7441012300125','Jabón en polvo 1kg',13,2990,2150,22,'']
-  ].map((r,i)=>({id:i+1,cod:r[0],nom:r[1],iva:r[2],precio:r[3],costo:r[4],stock:r[5],vence:r[6],cabys:''}));
+  const P=[];
   const sales=[]; let folio=1042;
   return {products:P,sales,seq:{folio},archivo:[],shift:{open:false},
     settings:{negocio:'Besalú Mercat',cedula:'3-101-000000',sucursal:'001',terminal:'00001',moneda:'₡ colones',ivaIncl:true,ivaDefault:13,stockMin:5,venceDias:15,correoDuena:'dueña@besalu.cr',cierreDiario:true,horaCierre:'22:00',cierreMensual:true,impresora:'EPSON TM-T20 (USB)',ticket:'80 mm',imprimirAlCobrar:true,pieTicket:'¡Gracias por su compra!',prov:'Alanube',ambiente:'Pruebas (sandbox)'}};
@@ -399,10 +385,8 @@ const METLBL={efectivo:'Efectivo',tarjeta:'Tarjeta',sinpe:'SINPE'};
 async function loadDB(){
   var d=null;
   if(window.BESALU&&BESALU.db){try{d=await BESALU.db.load();}catch(e){}}
-  if(d&&((d.products&&d.products.length)||(d.sales&&d.sales.length))){if(!d.settings)d.settings=seed().settings;if(!d.seq)d.seq={folio:1042};if(!d.shift)d.shift={open:false};if(!d.archivo)d.archivo=[];return d;}
-  var ls=load();
-  if(ls){if(window.BESALU&&BESALU.db){try{BESALU.db.save(ls);}catch(e){}}return ls;}
-  var s=seed();if(window.BESALU&&BESALU.db){try{BESALU.db.save(s);}catch(e){}}return s;
+  if(d&&d.settings){d.products=d.products||[];d.sales=d.sales||[];d.archivo=d.archivo||[];if(!d.seq)d.seq={folio:1042};if(!d.shift)d.shift={open:false};return d;}
+  var base=load()||seed();if(window.BESALU&&BESALU.db){try{BESALU.db.save(base);}catch(e){}}return base;
 }
 async function init(){DB=await loadDB();var a=document.getElementById('app');if(a)a.hidden=false;buildNav();updShiftPill();go('caja');tick();}
 const NAV=[{v:'caja',ic:'receipt',t:'Caja'},{v:'ventas',ic:'history',t:'Ventas'},{v:'inventario',ic:'box',t:'Inventario'},{v:'reportes',ic:'chart',t:'Reportes'},{v:'cierre',ic:'wallet',t:'Cierre'},{v:'ajustes',ic:'sliders',t:'Ajustes'}];
