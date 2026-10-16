@@ -82,6 +82,7 @@ label{display:block;font-size:12.5px;color:var(--ink-2);margin-bottom:6px;font-w
 
 .main{margin-left:244px;padding:16px 24px 28px 0;min-height:100%;}
 .topbar{position:sticky;top:16px;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 16px 12px 20px;border-radius:20px;margin-bottom:18px;animation:rise .45s var(--spring) both;}
+.topbar::before{content:"";position:absolute;left:-6px;right:-26px;bottom:100%;height:20px;background:#eaeef4;}
 .topbar .tt{display:flex;flex-direction:column;gap:1px;min-width:0;}
 .topbar h1{font-size:19px;margin:0;letter-spacing:-.03em;font-weight:700;}
 .topbar .ctx{font-size:12px;color:var(--ink-3);}
@@ -239,7 +240,7 @@ tbody tr:last-child td{border-bottom:none;} tbody tr{transition:background .12s;
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;} .btn::after{display:none;}}
 /* ---- rendimiento: superficies opacas, sin desenfoque ---- */
 .rail{background:#fff;}
-.topbar{background:rgba(255,255,255,.97);}
+.topbar{background:#fff;}
 .modal{background:#fff;}
 .toast,#upd{background:#fff;}
 .tabla-wrap th{background:#fbfcfd;}
@@ -265,3 +266,50 @@ tbody tr:last-child td{border-bottom:none;} tbody tr{transition:background .12s;
   #zona-impresion .ticket .small{color:#000;}
 }
 @media print{ #zona-impresion.t58 .ticket{width:48mm;font-size:10px;} }
+
+/* ================= v2: componentes de facturación ================= */
+/* buscador de la caja con sugerencias */
+.search .sugerencias{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:40;background:#fff;border:1px solid var(--line-2);border-radius:14px;box-shadow:var(--sh-lg);padding:6px;max-height:340px;overflow:auto;}
+.sug{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;text-align:left;background:transparent;border:none;border-radius:10px;padding:9px 11px;cursor:pointer;font:inherit;color:var(--ink);}
+.sug:hover,.sug:focus{background:var(--accent-soft);outline:none;}
+.sugerencias-fijas{display:flex;flex-direction:column;gap:2px;margin:-8px 0 12px;}
+.cant .n{min-width:44px;height:26px;border:1px dashed transparent;background:transparent;border-radius:7px;font-weight:700;cursor:text;}
+.cant .n:hover{border-color:var(--line-2);background:#fff;}
+.done-ok{width:52px;height:52px;border-radius:50%;background:var(--pos-soft);color:var(--pos);display:grid;place-items:center;margin:2px auto 12px;}
+.cambio-grande{font-size:34px;font-weight:800;letter-spacing:-.03em;color:var(--pos);margin:2px 0 10px;}
+
+/* selector de período y rango */
+.segmento{display:inline-flex;gap:4px;background:rgba(18,22,34,.05);border-radius:12px;padding:4px;}
+.segmento button{border:none;background:transparent;border-radius:9px;padding:7px 12px;font:inherit;font-size:13px;font-weight:600;color:var(--ink-2);cursor:pointer;}
+.segmento button.sel{background:#fff;color:var(--ink);box-shadow:var(--sh-sm);}
+.rango{display:inline-flex;align-items:center;gap:8px;} .rango input{width:auto;padding:7px 10px;font-size:13px;}
+.chk{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--ink-2);cursor:pointer;} .chk input{width:auto;}
+
+/* tablas */
+tr.clic{cursor:pointer;} tr.tachado td{opacity:.55;} tr.tachado td:first-child div:first-child{text-decoration:line-through;}
+td.acciones{white-space:nowrap;}
+.fila-revisar td{background:rgba(160,106,0,.06);}
+
+/* modales anchos y formularios */
+.modal.ancho{width:min(1020px,100%);}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+.lineas-compra{border:1px solid var(--line);max-height:46vh;}
+.lineas-compra td{vertical-align:top;padding:9px 10px;} .lineas-compra input,.lineas-compra select{padding:8px 9px;font-size:13.5px;}
+.nuevo-prod{display:flex;flex-direction:column;gap:6px;}
+.totales-compra{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:10px 22px;margin-top:14px;font-size:13.5px;color:var(--ink-2);}
+.totales-compra b{color:var(--ink);} .totales-compra .grande{font-size:17px;} .totales-compra .grande b{font-size:19px;}
+
+/* tarjeta de IVA */
+.iva-card{display:grid;grid-template-columns:1fr 1.1fr;gap:20px;align-items:center;border-radius:var(--r-md);padding:22px 24px;margin-bottom:16px;border:1px solid rgba(31,148,104,.25);background:linear-gradient(150deg,var(--accent-soft),#fff 70%);}
+.iva-card.a-favor{border-color:var(--line-2);background:#fff;}
+.iva-total .k{font-size:12.5px;font-weight:600;color:var(--ink-2);} .iva-total .v{font-size:40px;font-weight:800;letter-spacing:-.035em;margin:4px 0;}
+.iva-ecuacion{display:flex;flex-direction:column;gap:2px;}
+.iva-fila{display:flex;justify-content:space-between;gap:12px;padding:6px 0;font-size:13.5px;color:var(--ink-2);font-variant-numeric:tabular-nums;}
+.iva-fila.b{font-weight:700;color:var(--ink);border-top:1px solid var(--line);} .iva-fila.grande{font-size:16px;}
+
+/* medios de pago */
+.medios{display:flex;flex-direction:column;gap:12px;margin-top:16px;}
+.medio-fila{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:5px;font-size:13.5px;} .medio-fila span{display:inline-flex;align-items:center;gap:6px;font-weight:600;}
+.barra{height:7px;border-radius:99px;background:rgba(18,22,34,.06);overflow:hidden;} .barra i{display:block;height:100%;border-radius:99px;background:var(--accent);}
+
+@media (max-width:900px){ .g3,.iva-card{grid-template-columns:1fr;} }

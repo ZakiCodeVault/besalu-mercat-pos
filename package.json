@@ -1,8 +1,8 @@
 {
   "name": "besalu-mercat-pos",
   "productName": "Besalu Mercat POS",
-  "version": "1.0.4",
-  "description": "Punto de venta de Besalú Mercat (local, Windows, SQLite)",
+  "version": "2.0.0",
+  "description": "Sistema de facturación y punto de venta de Besalú Mercat (local, Windows, SQLite)",
   "author": "Besalu Mercat",
   "license": "UNLICENSED",
   "private": true,
@@ -10,13 +10,17 @@
   "scripts": {
     "iniciar": "electron .",
     "start": "electron .",
-    "prueba": "electron pruebas/prueba-completa.js",
+    "prueba": "npm run prueba:datos && npm run prueba:app",
+    "prueba:datos": "electron pruebas/datos.prueba.js",
+    "prueba:app": "electron pruebas/prueba-completa.js",
+    "reconstruir": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps",
     "dist": "electron-builder --win --x64"
   },
   "dependencies": {
+    "better-sqlite3": "^11.10.0",
     "electron-log": "^5.2.0",
-    "electron-updater": "^6.3.9",
-    "node-sqlite3-wasm": "^0.8.60"
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -35,7 +39,7 @@
       "package.json"
     ],
     "asarUnpack": [
-      "**/node_modules/node-sqlite3-wasm/**"
+      "**/node_modules/better-sqlite3/**"
     ],
     "publish": [
       {

@@ -3,33 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; connect-src 'self'">
+<!-- Seguridad: solo se ejecuta código de la propia app (sin scripts en línea ni recursos externos) -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'">
 <title>Besalú Mercat POS</title>
-<!-- Estilos: fuentes locales + apariencia de la app -->
 <link rel="stylesheet" href="fuentes/fuentes.css">
 <link rel="stylesheet" href="estilos.css">
 </head>
 <body>
 <!--
-  Estructura de la app. Todo el contenido de cada pantalla (Caja, Ventas,
-  Inventario, Reportes, Cierre, Ajustes) lo dibuja app.js dentro de las <section>.
+  Estructura de la app. El contenido de cada pantalla lo dibuja su módulo en js/:
+  Caja (caja.js) · Ventas (ventas.js) · Compras (compras.js) · Inventario (inventario.js)
+  Reportes (reportes.js) · Cierre (cierre.js) · Ajustes (ajustes.js)
 -->
 <div class="bg" aria-hidden="true"></div>
 <div id="app" hidden>
   <aside class="rail glass">
     <div class="brand"><div class="bt"><span class="b1">Besalú</span><span class="b2">MERCAT</span></div></div>
     <nav class="nav" id="nav"></nav>
-    </aside>
+  </aside>
   <main class="main">
     <div class="topbar glass">
-      <div class="tt"><h1 id="titulo">Caja</h1><span class="ctx" id="ctx">Minimarket Gourmet</span></div>
+      <div class="tt"><h1 id="titulo">Caja</h1><span class="ctx">Minimarket Gourmet</span></div>
       <div class="top-right">
-        <button class="shiftpill closed" id="shiftpill" onclick="toggleCaja()"></button>
+        <button class="shiftpill closed" id="shiftpill"></button>
         <div class="reloj" id="reloj"></div>
       </div>
     </div>
     <section class="vista" id="v-caja"></section>
     <section class="vista" id="v-ventas"></section>
+    <section class="vista" id="v-compras"></section>
     <section class="vista" id="v-inventario"></section>
     <section class="vista" id="v-reportes"></section>
     <section class="vista" id="v-cierre"></section>
@@ -39,7 +41,7 @@
 <div id="toasts"></div>
 <div id="modalRoot"></div>
 
-<!-- Aviso de actualización (lo controla actualizaciones.js) -->
+<!-- Aviso de actualización (oculto mientras no haya versión nueva) -->
 <div id="upd" hidden>
   <span class="upd-ic" id="upd-ic"></span>
   <div class="upd-txt"><div class="upd-t" id="upd-t"></div><div class="upd-s" id="upd-s"></div><div class="upd-bar" id="upd-bar" hidden><i id="upd-i"></i></div></div>
@@ -47,10 +49,20 @@
   <button class="upd-x" id="upd-x" title="Cerrar">&times;</button>
 </div>
 
-<!-- Aquí se arma el ticket para imprimir (invisible en pantalla) -->
+<!-- Aquí se arma lo que se imprime (invisible en pantalla) -->
 <div id="zona-impresion" aria-hidden="true"></div>
 
-<script src="app.js"></script>
-<script src="actualizaciones.js"></script>
+<script src="js/utilidades.js"></script>
+<script src="js/graficos.js"></script>
+<script src="js/ticket.js"></script>
+<script src="js/caja.js"></script>
+<script src="js/ventas.js"></script>
+<script src="js/compras.js"></script>
+<script src="js/inventario.js"></script>
+<script src="js/reportes.js"></script>
+<script src="js/cierre.js"></script>
+<script src="js/ajustes.js"></script>
+<script src="js/actualizaciones.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>

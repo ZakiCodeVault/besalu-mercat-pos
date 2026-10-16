@@ -11,7 +11,8 @@ Desde la carpeta `windows-app/`:
 
 ```bash
 # 1) subir el numero de version (crea el commit y el tag vX.Y.Z)
-npm version patch        # 1.0.0 -> 1.0.1   (usa "minor" o "major" si aplica)
+npm run prueba           # antes de publicar: todas las pruebas deben pasar
+npm version patch        # 2.0.0 -> 2.0.1   (usa "minor" o "major" si aplica)
 
 # 2) empujar codigo + tag  -> dispara la compilacion
 git push --follow-tags
@@ -46,11 +47,20 @@ hay que entrar a **Releases**, abrir el borrador `vX.Y.Z`, revisar y tocar
 
 ## Probar el flujo de punta a punta
 
-1. Publica la version actual (1.0.0) y instala el `.exe` en una PC Windows.
+1. Publica la version actual (2.0.0) y instala el `.exe` en una PC Windows.
 2. Sube una version: `npm version patch` y `git push --follow-tags`.
 3. Cuando Actions termine, **publica** el nuevo Release.
-4. Abri la app instalada: en un rato detecta la 1.0.1, la descarga y ofrece
+4. Abri la app instalada: en un rato detecta la 2.0.1, la descarga y ofrece
    reiniciar. Listo.
+
+## Cambios en la base de datos
+
+Las actualizaciones **nunca borran datos**. Si una version nueva necesita
+cambiar tablas, se agrega una migracion al final de `MIGRACIONES` en
+`principal/datos/esquema.js` (la base guarda su numero en `PRAGMA user_version`
+y aplica solo las que faltan, dentro de una transaccion). Nunca editar una
+migracion ya publicada. Antes de migrar, la app guarda una copia completa
+(`antes-de-migrar-vN-....sqlite`) junto a la base.
 
 ## Firma de codigo (para que Windows no marque "Editor desconocido")
 

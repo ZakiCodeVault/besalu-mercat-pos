@@ -1,6 +1,6 @@
 # Generar el instalador de Windows con Docker
 
-Esto compila `BesaluMercatPOS-Setup-1.0.0.exe` sin necesitar una PC con Windows,
+Esto compila `BesaluMercatPOS-Setup-X.Y.Z.exe` sin necesitar una PC con Windows,
 usando la imagen `electronuserland/builder:wine` (Node + electron-builder + Wine).
 
 > **Dónde correrlo:** en un host **amd64 / x86_64** con Docker — tu **VPS Ubuntu**
@@ -17,7 +17,7 @@ docker run --rm -v "$PWD:/project" -w /project \
   bash -c "npm install && npm run dist"
 ```
 
-El instalador queda en `windows-app/dist/BesaluMercatPOS-Setup-1.0.0.exe`.
+El instalador queda en `windows-app/dist/BesaluMercatPOS-Setup-X.Y.Z.exe`.
 
 ## Opción B — con el Dockerfile (reproducible)
 
@@ -29,7 +29,7 @@ docker build -t besalu-pos-builder .
 docker run --rm -v "$PWD/dist:/app/dist" besalu-pos-builder
 ```
 
-Resultado: `windows-app/dist/BesaluMercatPOS-Setup-1.0.0.exe`.
+Resultado: `windows-app/dist/BesaluMercatPOS-Setup-X.Y.Z.exe`.
 
 ## En Apple Silicon (si insistís en probar en la Mac)
 
@@ -50,6 +50,11 @@ El workflow `.github/workflows/release.yml` compila el `.exe` de forma nativa en
 `windows-latest` cada vez que se empuja un tag `v*`. Ver `GUIA-VERSIONES.md`.
 
 ## Notas
+
+- **Desde la v2** la base usa `better-sqlite3`, un modulo nativo. electron-builder
+  descarga el binario ya compilado para Windows (prebuilt). Si no lo encuentra,
+  no puede compilarlo desde Linux: en ese caso usar GitHub Actions, que es el
+  camino oficial y probado.
 
 - `npm run dist` descarga Electron y utilidades la primera vez: el contenedor
   necesita **internet**.
