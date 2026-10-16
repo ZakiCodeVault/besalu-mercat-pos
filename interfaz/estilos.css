@@ -1,6 +1,9 @@
 /* estilos.css — Apariencia de Besalú Mercat POS */
-/* Besalú Mercat POS — "liquid glass" real: aurora animada tras vidrio esmerilado,
-   grafito + jade (sin azul genérico), microinteracciones. Tema claro a propósito. */
+/* Lo que tiene el atributo hidden NUNCA se muestra (p. ej. el aviso de actualización
+   mientras no haya una versión nueva), aunque otra regla le ponga display. */
+[hidden]{display:none !important;}
+/* Tema claro: superficies blancas sólidas, sin desenfoque ni animaciones de fondo
+   (rápido en cualquier equipo). Grafito + verde jade como acentos. */
 :root{
   color-scheme: light;
   --ink:#12141a; --ink-2:#596070; --ink-3:#99a0ae;

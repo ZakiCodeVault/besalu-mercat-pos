@@ -1,7 +1,7 @@
 {
   "name": "besalu-mercat-pos",
   "productName": "Besalu Mercat POS",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Punto de venta de Besalú Mercat (local, Windows, SQLite)",
   "author": "Besalu Mercat",
   "license": "UNLICENSED",
@@ -25,14 +25,34 @@
   "build": {
     "appId": "com.besalu.mercatpos",
     "productName": "Besalu Mercat POS",
-    "directories": { "output": "dist", "buildResources": "recursos" },
-    "files": [ "principal/**/*", "interfaz/**/*", "package.json" ],
-    "asarUnpack": [ "**/node_modules/node-sqlite3-wasm/**" ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "recursos"
+    },
+    "files": [
+      "principal/**/*",
+      "interfaz/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/node-sqlite3-wasm/**"
+    ],
     "publish": [
-      { "provider": "github", "owner": "ZakiCodeVault", "repo": "besalu-mercat-pos" }
+      {
+        "provider": "github",
+        "owner": "ZakiCodeVault",
+        "repo": "besalu-mercat-pos"
+      }
     ],
     "win": {
-      "target": [ { "target": "nsis", "arch": [ "x64" ] } ],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "recursos/icono.png"
     },
     "nsis": {

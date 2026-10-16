@@ -74,6 +74,8 @@ async function correr() {
   verificar('Sin logo en la interfaz', await js("!document.querySelector('.crest')"));
   // Si el CSS tiene una llave sin cerrar, las últimas reglas no se aplican: esto lo detecta.
   verificar('Estilos completos (aviso de actualización)', await js("getComputedStyle(document.getElementById('upd')).position==='fixed'"));
+  verificar('Aviso de actualización oculto si no hay versión nueva',
+    await js("getComputedStyle(document.getElementById('upd')).display==='none' && getComputedStyle(document.getElementById('zona-impresion')).display==='none'"));
 
   // ---- Inventario: agregar producto ----
   await js("DB.settings.imprimirAlCobrar=false; go('inventario'); modalProducto(); true");
@@ -156,6 +158,18 @@ async function correr() {
   verificar('Abrir la app con 3.000+ ventas', r2.ok && r2.ms < 3000, r2.ms + ' ms');
   const tRep = await js("(()=>{const t=performance.now(); go('reportes'); go('ventas'); go('caja'); return Math.round(performance.now()-t);})()");
   verificar('Abrir Reportes + Ventas con 3.000+ ventas', tRep < 1000, tRep + ' ms');
+
+  // ---- Simular que llega una actualización ----
+  ventana.webContents.send('actualizacion', { state: 'downloading', percent: 40 });
+  await esperar(150);
+  const bajando = await js("({vis:getComputedStyle(document.getElementById('upd')).display, t:document.getElementById('upd-t').textContent, p:document.getElementById('upd-i').style.width})");
+  ventana.webContents.send('actualizacion', { state: 'downloaded', version: '9.9.9' });
+  await esperar(150);
+  const lista = await js("({vis:getComputedStyle(document.getElementById('upd')).display, t:document.getElementById('upd-t').textContent, botones:[...document.querySelectorAll('#upd-act button')].map(b=>b.textContent)})");
+  verificar('Aviso aparece al descargar una actualización', bajando.vis === 'flex' && bajando.p === '40%', bajando.t + ' ' + bajando.p);
+  verificar('Aviso "Versión lista" con Reiniciar / Más tarde', lista.vis === 'flex' && /9\.9\.9/.test(lista.t) && lista.botones.join('|') === 'Reiniciar y actualizar|Más tarde', lista.t);
+  await js("__boton('Más tarde', document.getElementById('upd')).click(); true");
+  verificar('"Más tarde" oculta el aviso', await js("getComputedStyle(document.getElementById('upd')).display==='none'"));
 
   verificar('Sin errores en la consola', erroresConsola.length === 0, erroresConsola.slice(0, 3).join(' | '));
 
