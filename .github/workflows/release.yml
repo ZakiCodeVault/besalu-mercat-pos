@@ -19,10 +19,10 @@ jobs:
       - name: Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Instalar dependencias
-        run: npm install
+        run: npm ci
 
       - name: Compilar y publicar el instalador
         env:

@@ -44,16 +44,15 @@ docker run --rm --platform linux/amd64 -v "$PWD:/project" -w /project \
 
 Puede tardar mucho o fallar en el paso de NSIS/Wine. Si pasa eso, usá el VPS.
 
-## Alternativa sin Docker: GitHub Actions
+## Alternativa sin Docker: GitHub Actions (la que se usa hoy)
 
-Un runner `windows-latest` compila el `.exe` de forma nativa (lo más estable).
-Si querés, te armo el workflow `.github/workflows/release.yml` que lo genera en
-cada tag `v*` y lo sube como artefacto/release.
+El workflow `.github/workflows/release.yml` compila el `.exe` de forma nativa en
+`windows-latest` cada vez que se empuja un tag `v*`. Ver `GUIA-VERSIONES.md`.
 
 ## Notas
 
 - `npm run dist` descarga Electron y utilidades la primera vez: el contenedor
   necesita **internet**.
 - La salida y la carpeta `dist/` se ignoran en git (ver `.dockerignore`).
-- El icono (`build/icon.ico`) y la firma de código siguen siendo opcionales;
-  ver `README.md`.
+- El ícono está en `recursos/icono.png`. La firma de código es opcional;
+  ver `GUIA-VERSIONES.md`.

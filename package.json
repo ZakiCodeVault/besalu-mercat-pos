@@ -1,14 +1,16 @@
 {
   "name": "besalu-mercat-pos",
   "productName": "Besalu Mercat POS",
-  "version": "1.0.2",
-  "description": "Punto de venta Besalu Mercat (local, Windows)",
+  "version": "1.0.3",
+  "description": "Punto de venta de Besalú Mercat (local, Windows, SQLite)",
   "author": "Besalu Mercat",
   "license": "UNLICENSED",
   "private": true,
-  "main": "main.js",
+  "main": "principal/main.js",
   "scripts": {
+    "iniciar": "electron .",
     "start": "electron .",
+    "prueba": "electron pruebas/prueba-completa.js",
     "dist": "electron-builder --win --x64"
   },
   "dependencies": {
@@ -23,15 +25,15 @@
   "build": {
     "appId": "com.besalu.mercatpos",
     "productName": "Besalu Mercat POS",
-    "directories": { "output": "dist" },
-    "files": [ "main.js", "preload.js", "renderer/**/*", "package.json" ],
+    "directories": { "output": "dist", "buildResources": "recursos" },
+    "files": [ "principal/**/*", "interfaz/**/*", "package.json" ],
     "asarUnpack": [ "**/node_modules/node-sqlite3-wasm/**" ],
     "publish": [
       { "provider": "github", "owner": "ZakiCodeVault", "repo": "besalu-mercat-pos" }
     ],
     "win": {
       "target": [ { "target": "nsis", "arch": [ "x64" ] } ],
-      "icon": "build/icon.png"
+      "icon": "recursos/icono.png"
     },
     "nsis": {
       "oneClick": false,
@@ -43,9 +45,9 @@
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "shortcutName": "Besalu Mercat POS",
-      "installerSidebar": "build/installerSidebar.bmp",
-      "uninstallerSidebar": "build/installerSidebar.bmp",
-      "license": "build/license.txt",
+      "installerSidebar": "recursos/panel-instalador.bmp",
+      "uninstallerSidebar": "recursos/panel-instalador.bmp",
+      "license": "recursos/licencia.txt",
       "artifactName": "BesaluMercatPOS-Setup-${version}.exe"
     }
   }
