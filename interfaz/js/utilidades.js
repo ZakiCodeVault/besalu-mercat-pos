@@ -188,7 +188,7 @@ const TARIFAS = [[13, '13 % (general)'], [4, '4 %'], [2, '2 %'], [1, '1 % (canas
 const TIPOS_ID = [['01', 'Cédula física'], ['02', 'Cédula jurídica'], ['03', 'DIMEX'], ['04', 'NITE'], ['05', 'Extranjero']];
 const MEDIOS = { efectivo: ['Efectivo', 'cash'], tarjeta: ['Tarjeta', 'card'], sinpe: ['SINPE', 'phone'] };
 const NOMBRE_TIPO = { '01': 'Factura', '03': 'Nota de crédito', '04': 'Tiquete' };
-const ESTADO_HACIENDA = { pendiente: ['Pendiente de envío', ''], enviado: ['Enviado', 'pill--accent'], aceptado: ['Aceptado', 'pill--green'], rechazado: ['Rechazado', 'pill--red'], error: ['Error de envío', 'pill--amber'] };
+const ESTADO_HACIENDA = { pendiente: ['Pendiente de envío', ''], enviado: ['En validación', 'pill--accent'], aceptado: ['Aceptado', 'pill--green'], rechazado: ['Rechazado', 'pill--red'], error: ['Error de envío', 'pill--amber'] };
 
 function stat(etiqueta, valor, pie, opciones = {}) {
   return el('div', { class: 'stat glass' + (opciones.destacado ? ' stat--destacado' : '') }, [

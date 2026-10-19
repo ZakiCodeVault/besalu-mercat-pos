@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('BESALU', {
   },
   ventas: {
     emitir: c('ventas:emitir'), listar: c('ventas:listar'), obtener: c('ventas:obtener'),
-    notaCredito: c('ventas:notaCredito'), buscarClientes: c('clientes:buscar')
+    notaCredito: c('ventas:notaCredito'), reemitir: c('ventas:reemitir'), buscarClientes: c('clientes:buscar')
   },
   compras: {
     registrar: c('compras:registrar'), listar: c('compras:listar'), obtener: c('compras:obtener'),
@@ -53,7 +53,16 @@ contextBridge.exposeInMainWorld('BESALU', {
     abrirCarpeta: c('respaldos:abrirCarpeta')
   },
   exportar: (tipo, a, b) => llamar('exportar:csv', tipo, a, b),
-  hacienda: { estado: c('hacienda:estado') },
+  hacienda: {
+    estado: c('hacienda:estado'), elegirLlave: c('hacienda:elegirLlave'), guardar: c('hacienda:guardar'),
+    probar: c('hacienda:probar'), procesar: c('hacienda:procesar'), reintentar: c('hacienda:reintentar'),
+    guardarXml: c('hacienda:guardarXml'), empezarProduccion: c('hacienda:empezarProduccion'),
+    alCambiar: (cb) => {
+      const h = (_e, info) => { try { cb(info); } catch (e) {} };
+      ipcRenderer.on('hacienda', h);
+      return () => ipcRenderer.removeListener('hacienda', h);
+    }
+  },
 
   actualizaciones: {
     alCambiar: (cb) => {

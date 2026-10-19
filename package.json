@@ -1,7 +1,7 @@
 {
   "name": "besalu-mercat-pos",
   "productName": "Besalu Mercat POS",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Sistema de facturación y punto de venta de Besalú Mercat (local, Windows, SQLite)",
   "author": "Besalu Mercat",
   "license": "UNLICENSED",
@@ -10,8 +10,9 @@
   "scripts": {
     "iniciar": "electron .",
     "start": "electron .",
-    "prueba": "npm run prueba:datos && npm run prueba:app",
+    "prueba": "npm run prueba:datos && npm run prueba:hacienda && npm run prueba:app",
     "prueba:datos": "electron pruebas/datos.prueba.js",
+    "prueba:hacienda": "electron pruebas/hacienda.prueba.js",
     "prueba:app": "electron pruebas/prueba-completa.js",
     "reconstruir": "electron-builder install-app-deps",
     "postinstall": "electron-builder install-app-deps",
@@ -20,11 +21,14 @@
   "dependencies": {
     "better-sqlite3": "^11.10.0",
     "electron-log": "^5.2.0",
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "node-forge": "^1.4.0"
   },
   "devDependencies": {
+    "@xmldom/xmldom": "^0.9.12",
     "electron": "^33.2.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "xml-crypto": "^6.4.0"
   },
   "build": {
     "appId": "com.besalu.mercatpos",

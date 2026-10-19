@@ -21,7 +21,11 @@ const AJUSTES_BASE = {
   actividadEconomica: '',     // código de actividad (lo pide Hacienda)
   telefono: '',
   correo: '',
-  direccion: '',
+  direccion: '',              // otras señas (obligatorio para Hacienda)
+  provincia: '',              // 1 a 7
+  canton: '',                 // 2 dígitos
+  distrito: '',               // 2 dígitos
+  barrio: '',
   sucursal: '001',
   terminal: '00001',
   stockMin: 5,
@@ -105,6 +109,8 @@ function guardarAjustes(nuevos) {
   for (const k of Object.keys(AJUSTES_BASE)) if (k in nuevos) permitidos[k] = nuevos[k];
   const final = Object.assign(actuales, permitidos);
   final.cedula = String(final.cedula || '').replace(/\D/g, '');
+  final.actividadEconomica = String(final.actividadEconomica || '').trim();
+  for (const k of ['provincia', 'canton', 'distrito']) final[k] = String(final[k] || '').replace(/\D/g, '');
   final.sucursal = String(final.sucursal || '1').replace(/\D/g, '').padStart(3, '0').slice(-3);
   final.terminal = String(final.terminal || '1').replace(/\D/g, '').padStart(5, '0').slice(-5);
   escribirConfig('ajustes', final);

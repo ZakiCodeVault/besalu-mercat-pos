@@ -58,7 +58,8 @@ function filaProducto(p) {
   if (d !== null && d < 0) vence = el('span', { class: 'pill pill--red', text: 'Vencido' });
   else if (d !== null && d <= App.ajustes.venceDias) vence = el('span', { class: 'pill pill--amber', text: d + ' d' });
   return el('tr', { class: p.activo ? '' : 'tachado' }, [
-    el('td', {}, [el('div', { style: 'font-weight:600', text: p.nombre }), el('div', { class: 'mini', text: p.codigo + (p.cabys ? ' · CABYS ' + p.cabys : ' · sin CABYS') })]),
+    el('td', {}, [el('div', { style: 'font-weight:600', text: p.nombre }), el('div', { class: 'mini' }, [p.codigo + (p.cabys ? ' · CABYS ' + p.cabys : ''),
+      App.hacienda && App.hacienda.activo && !/^\d{13}$/.test(p.cabys || '') ? el('span', { class: 'pill pill--red', style: 'margin-left:6px', text: 'Sin CABYS: no se puede vender' }) : (p.cabys ? '' : ' · sin CABYS')])]),
     el('td', { class: 'der' }, el('span', { class: 'pill ' + (p.tarifa_iva === 13 ? '' : 'pill--accent'), text: p.tarifa_iva ? p.tarifa_iva + '%' : 'Exento' })),
     el('td', { class: 'der', text: money(p.costo) }),
     el('td', { class: 'der', text: money(p.precio) }),

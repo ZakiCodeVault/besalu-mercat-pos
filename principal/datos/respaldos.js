@@ -104,4 +104,47 @@ async function restaurar(nombreOruta) {
   return { ok: true, comprobantes: v.comprobantes, productos: v.productos };
 }
 
-module.exports = { configurar, carpetaRespaldos, verificarArchivo, crear, siCorresponde, listar, restaurar };
+/**
+ * Empieza una base nueva (p. ej. al pasar de las pruebas con Hacienda a la
+ * facturación real). La base actual se guarda completa en la carpeta de
+ * respaldos como "archivo-<motivo>-<fecha>.sqlite" (no se borra nunca) y la
+ * nueva arranca sin comprobantes ni compras, con los mismos ajustes, productos
+ * (su existencia actual pasa a ser el inventario inicial), clientes y proveedores.
+ */
+async function empezarBaseNueva(motivo = 'pruebas') {
+  if (!carpeta) throw new Error('Respaldos sin configurar');
+  const d = conexion.obtener();
+  const ajustes = conexion.leerAjustes();
+  const productos = d.prepare('SELECT * FROM productos WHERE activo = 1 ORDER BY id').all();
+  const clientes = d.prepare('SELECT tipo_id, identificacion, nombre, correo, telefono FROM clientes').all();
+  const proveedores = d.prepare('SELECT tipo_id, identificacion, nombre, correo, telefono FROM proveedores').all();
+  const comprobantes = d.prepare('SELECT count(*) AS n FROM comprobantes').get().n;
+
+  const archivo = path.join(carpeta, 'archivo-' + String(motivo).replace(/[^a-z0-9-]/gi, '') + '-' + fechaLocal().replace(/[: ]/g, '-') + '.sqlite');
+  await d.backup(archivo);
+  const v = verificarArchivo(archivo);
+  if (!v.ok) { fs.rmSync(archivo, { force: true }); throw new Error('No se pudo archivar la base actual: ' + v.detalle); }
+
+  const actual = conexion.rutaArchivo();
+  conexion.cerrar();
+  for (const sufijo of ['', '-wal', '-shm']) fs.rmSync(actual + sufijo, { force: true });
+  conexion.abrir(path.dirname(actual));
+
+  const nueva = conexion.obtener();
+  const productosMod = require('./productos');
+  nueva.transaction(() => {
+    conexion.guardarAjustes(ajustes);
+    for (const p of productos) {
+      productosMod.crear({ codigo: p.codigo, nombre: p.nombre, cabys: p.cabys, unidad: p.unidad, tarifa_iva: p.tarifa_iva,
+        precio: p.precio, costo: p.costo, stock_minimo: p.stock_minimo, vence: p.vence, stock_inicial: Math.max(0, p.stock) }, { conBitacora: false });
+    }
+    const insC = nueva.prepare('INSERT INTO clientes(tipo_id, identificacion, nombre, correo, telefono) VALUES(@tipo_id, @identificacion, @nombre, @correo, @telefono)');
+    for (const c of clientes) insC.run(c);
+    const insP = nueva.prepare('INSERT INTO proveedores(tipo_id, identificacion, nombre, correo, telefono) VALUES(@tipo_id, @identificacion, @nombre, @correo, @telefono)');
+    for (const p of proveedores) insP.run(p);
+    conexion.registrar('base_nueva', { motivo, archivo: path.basename(archivo), comprobantes_archivados: comprobantes, productos: productos.length });
+  })();
+  return { archivo, productos: productos.length, comprobantesArchivados: comprobantes };
+}
+
+module.exports = { configurar, carpetaRespaldos, verificarArchivo, crear, siCorresponde, listar, restaurar, empezarBaseNueva };

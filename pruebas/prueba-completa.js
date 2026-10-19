@@ -2,8 +2,12 @@
  * prueba-completa.js — Prueba de punta a punta con la app REAL (interfaz + base).
  *
  * Usa una carpeta de datos temporal (no toca los datos del negocio) y recorre el
- * día de trabajo: configurar negocio → producto → compra desde XML → abrir caja →
- * vender → facturar → nota de crédito → IVA → cierre Z → respaldo → reiniciar.
+ * día de trabajo: configurar negocio → conectar Hacienda → producto → compra desde
+ * XML → abrir caja → vender → facturar → nota de crédito → Hacienda acepta → IVA →
+ * cierre Z → respaldo → reiniciar.
+ *
+ * Hacienda es un servidor local simulado (verifica firma y XSD) y la llave .p12
+ * es falsa: nada sale de esta computadora.
  *
  * Uso:  npm run prueba:app
  */
@@ -12,9 +16,25 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
+const { generarLlavePrueba } = require('./llave-prueba');
+const { crearSimulador } = require('./hacienda-simulada');
+
 const carpeta = fs.mkdtempSync(path.join(os.tmpdir(), 'besalu-app-'));
 app.setPath('userData', carpeta);
+
+// Hacienda simulada y llave de prueba (la app apunta a ellas solo en desarrollo)
+const PUERTO = 30000 + Math.floor(Math.random() * 20000);
+const USUARIO = 'cpj-3-101-123456@stag.comprobanteselectronicos.go.cr';
+const CONTRASENA = 'W$/JX/AS@K);1]I;u|+6';
+const llavePrueba = generarLlavePrueba({ pin: '4321', serie: 'CPJ-3-101-123456' });
+const archivoLlave = path.join(carpeta, 'llave-prueba.p12');
+fs.writeFileSync(archivoLlave, llavePrueba.p12);
+const base = 'http://127.0.0.1:' + PUERTO;
+process.env.BESALU_HACIENDA_URLS = JSON.stringify({ token: base + '/token', cerrarSesion: base + '/logout', recepcion: base + '/recepcion' });
+process.env.BESALU_CIFRADO_PRUEBA = '1';
+require('electron').dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [archivoLlave] });   // "Elegir archivo .p12…"
 require('../principal/main.js');
+let sim = null;
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 const resultados = [];
@@ -91,10 +111,29 @@ async function correr() {
   await js(`const v = document.getElementById('v-ajustes');
     __escribir(__campo('Número de cédula', v), '3-101-123456');
     __escribir(__campo('Teléfono', v), '2222-3333');
+    __escribir(__campo('Actividad económica', v), '471101');
+    __escribir(__campo('Correo (aquí llegan las respuestas de los clientes)', v), 'facturas@besalu.cr');
+    __escribir(__campo('Provincia', v), '1'); __escribir(__campo('Cantón', v), '02'); __escribir(__campo('Distrito', v), '03');
+    __escribir(__campo('Dirección (otras señas)', v), 'Escazú, frente a la plaza');
     __campo('Imprimir al cobrar', v).checked = false;
     __boton('Guardar cambios', v).click(); true`);
   await esperar(500);
-  verificar('Guardar datos del negocio', await js("App.ajustes.cedula === '3101123456' && App.ajustes.imprimirAlCobrar === false"));
+  verificar('Guardar datos del negocio (emisor completo)', await js("App.ajustes.cedula === '3101123456' && App.ajustes.imprimirAlCobrar === false && App.ajustes.canton === '02'"));
+
+  // ---- Conectar Hacienda desde Ajustes ----
+  sim = await crearSimulador({ usuario: USUARIO, contrasena: CONTRASENA, certPem: llavePrueba.certPem, puerto: PUERTO });
+  await js(`__boton('Elegir archivo .p12', document.querySelector('.hacienda-card')).click(); true`); await esperar(300);
+  await js(`const t = document.querySelector('.hacienda-card');
+    __escribir(__campo('Usuario de la API', t), '${USUARIO}');
+    __escribir(__campo('Contraseña de la API', t), ${JSON.stringify(CONTRASENA)});
+    __escribir(__campo('PIN de la llave', t), '4321');
+    __campo('Enviar comprobantes a Hacienda', t).checked = true;
+    __boton('Guardar conexión', t).click(); true`);
+  await esperar(700);
+  const hc = await js("({ activo: App.hacienda && App.hacienda.activo, titular: App.hacienda && App.hacienda.certificado && App.hacienda.certificado.titular, pill: document.getElementById('hpill').hidden ? '' : document.getElementById('hpill').textContent })");
+  verificar('Conectar Hacienda (llave .p12, PIN, usuario y contraseña)', hc.activo && /BESALU/.test(hc.titular) && hc.pill.includes('Hacienda'), hc.titular + ' · ' + hc.pill);
+  await js(`__boton('Probar conexión', document.querySelector('.hacienda-card')).click(); true`); await esperar(600);
+  verificar('Probar conexión con Hacienda', await js("App.hacienda.enLinea === true"));
 
   // ---- Producto nuevo ----
   await js(`go('inventario'); true`); await esperar(300);
@@ -185,6 +224,22 @@ async function correr() {
   await js(`__boton('Cerrar caja', __modal()).click(); true`); await esperar(700);
   verificar('Cerrar caja e imprimir Z', await js('App.turno === null && window.__impresiones >= 1'));
 
+  // ---- Hacienda acepta todo lo emitido ----
+  let pendientes = 99;
+  for (let i = 0; i < 40 && pendientes; i++) {
+    await esperar(500);
+    pendientes = await js("(async () => (await BESALU.ventas.listar({})).filter(c => c.estado_hacienda !== 'aceptado').length)()");
+  }
+  const hz = await js("(async () => { const l = await BESALU.ventas.listar({}); return { n: l.length, estados: [...new Set(l.map(c => c.estado_hacienda))].join(',') }; })()");
+  verificar('Hacienda aceptó los ' + hz.n + ' comprobantes (enviados solos, en segundo plano)', pendientes === 0 && sim.recibidos.length === hz.n && !sim.errores.length,
+    hz.estados + (sim.errores.length ? ' · ' + sim.errores[0] : ''));
+  await js(`go('ventas'); true`); await esperar(500);
+  await js(`(async () => { const l = await BESALU.ventas.listar({}); await verComprobante(l.find(c => c.tipo === '01').id); })(); true`); await esperar(500);
+  const sec = await js("({ texto: __modal().querySelector('.hseccion').textContent, botones: [...__modal().querySelectorAll('.hseccion button')].map(b => b.textContent) })");
+  verificar('El comprobante muestra "Aceptado" y permite guardar el XML firmado y la respuesta', sec.texto.includes('Aceptado (pruebas)') && sec.botones.includes('XML firmado') && sec.botones.includes('Respuesta de Hacienda'), sec.botones.join(' · '));
+  await js('while (hayModal()) cerrarModal(); true');
+  verificar('Indicador "Hacienda al día"', await js("document.getElementById('hpill').textContent.includes('al día')"));
+
   // ---- Respaldo ----
   await js(`go('ajustes'); true`); await esperar(500);
   await js(`__boton('Respaldar ahora').click(); true`); await esperar(800);
@@ -199,7 +254,8 @@ async function correr() {
   verificar('Integridad verificada (archivo, kárdex, consecutivos)', persist.integ);
   verificar('La interfaz no tiene acceso directo a la base (solo operaciones permitidas)', await js("typeof BESALU.sql === 'undefined' && typeof require === 'undefined' && !('exec' in BESALU)"));
 
-  // ---- Velocidad con muchas ventas ----
+  // ---- Velocidad con muchas ventas (sin envío a Hacienda) ----
+  await js(`(async () => { const h = App.hacienda; await BESALU.hacienda.guardar({ activo: false, ambiente: h.ambiente, usuario: h.usuario }); })(); true`); await esperar(300);
   await js(`(async () => { await BESALU.caja.abrir(0); const p = App.catalogo.find(x => x.codigo === '7441001100118'); await BESALU.productos.ajustar(p.id, 100000, 'Carga para prueba'); })(); true`); await esperar(300);
   const msVenta = await js(`(async () => { const id = App.catalogo.find(x => x.codigo === '7441001100118').id; const t = performance.now();
     for (let i = 0; i < 1000; i++) await BESALU.ventas.emitir({ lineas: [{ producto_id: id, cantidad: 1 }], medio_pago: 'tarjeta' });
@@ -219,7 +275,7 @@ async function correr() {
 
   const fallas = resultados.filter((r) => !r.ok).length;
   console.log('\n' + (fallas ? '✘ ' + fallas + ' prueba(s) fallaron' : '✔ Todas las pruebas pasaron (' + resultados.length + ')') + '\n');
-  try { require('../principal/datos').conexion.cerrar(); fs.rmSync(carpeta, { recursive: true, force: true }); } catch (e) {}
+  try { await sim.cerrar(); require('../principal/hacienda/conector').detener(); require('../principal/datos').conexion.cerrar(); fs.rmSync(carpeta, { recursive: true, force: true }); } catch (e) {}
   app.exit(fallas ? 1 : 0);
 }
 

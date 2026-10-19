@@ -2,11 +2,15 @@
 
 Sistema de punto de venta y facturación para **Besalú Mercat — Minimarket Gourmet**
 (Costa Rica). Funciona **local** en Windows, guarda todo en una base de datos
-**SQLite** en la propia computadora y se **actualiza solo** desde GitHub.
+**SQLite** en la propia computadora, **envía cada comprobante directo a
+Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHub.
 
 - Una sede, una caja. Sin login.
 - Registra **todas** las ventas (tiquetes, facturas y notas de crédito) y
   **todas** las compras a proveedores, con su inventario.
+- Firma cada comprobante (XML 4.4 + firma XAdES-EPES con la llave
+  criptográfica) y lo envía a la API de Hacienda en segundo plano. Si no hay
+  internet la caja sigue vendiendo y los envía solos al volver la conexión.
 - Calcula en todo momento el **IVA a pagar a Hacienda** (lo cobrado en ventas
   menos lo pagado en compras) y el **balance de entradas y salidas**.
 - Los datos fiscales **no se pueden modificar ni borrar**: la base de datos lo
@@ -25,7 +29,7 @@ Sistema de punto de venta y facturación para **Besalú Mercat — Minimarket Go
 6. [Dónde se guardan los datos y respaldos](#dónde-se-guardan-los-datos-y-respaldos)
 7. [Instalar en una caja (Windows)](#instalar-en-una-caja-windows)
 8. [Primer uso](#primer-uso)
-9. [Hacienda (factura electrónica)](#hacienda-factura-electrónica)
+9. [Hacienda: conexión propia](#hacienda-conexión-propia)
 10. [Trabajar en el código](#trabajar-en-el-código)
 11. [Pruebas](#pruebas)
 12. [Publicar una versión nueva](#publicar-una-versión-nueva)
@@ -40,12 +44,12 @@ Sistema de punto de venta y facturación para **Besalú Mercat — Minimarket Go
 | Pantalla | Para qué sirve |
 |---|---|
 | **Caja** (F1) | Escanear o buscar productos y cobrar en efectivo (con cambio), tarjeta o SINPE. Sin cliente emite un **tiquete**; con cliente (identificación + nombre) emite una **factura**. Cada comprobante sale con su **consecutivo** y **clave** de 50 dígitos. |
-| **Ventas** (F2) | Todos los comprobantes emitidos, con búsqueda por consecutivo, cliente o cédula. Ver, reimprimir y emitir **nota de crédito** (anula la venta y devuelve el inventario). Exportar a Excel. |
+| **Ventas** (F2) | Todos los comprobantes emitidos, con su **estado en Hacienda** (pendiente, en validación, aceptado, rechazado). Ver, reimprimir, descargar el **XML firmado** y la **respuesta de Hacienda**, emitir **nota de crédito** (anula la venta y devuelve el inventario) y **reemitir** un comprobante rechazado. Exportar a Excel. |
 | **Compras** (F3) | Registrar las **facturas de proveedores**: a mano o **importando el XML** de la factura electrónica. Suma el inventario, actualiza el costo promedio y guarda el IVA pagado. Anular una compra mal registrada. |
 | **Inventario** (F4) | Productos con CABYS, tarifa de IVA, costo, precio y existencia. **Kárdex** por producto (cada entrada y salida con su documento). Ajustes de inventario con motivo (conteo físico, merma, vencido…). Alertas de stock bajo y vencimientos. |
 | **Reportes** (F5) | **IVA a pagar** del período (débito − crédito) y desglose por tarifa. Ventas netas, costo de lo vendido, utilidad, compras. **Entradas y salidas** de inventario. Ventas por día, medios de pago, más vendidos. Exportar ventas, compras e IVA a Excel. |
 | **Cierre** (F6) | Turno de caja: fondo inicial, ventas por medio de pago, arqueo de efectivo (esperado vs. contado) y cierre con **reporte Z**. Al cerrar se hace un respaldo automático. |
-| **Ajustes** (F7) | Datos del negocio emisor (cédula, sucursal, terminal), impresión, respaldos y restauración, verificación de integridad, bitácora, estado de Hacienda y actualizaciones. |
+| **Ajustes** (F7) | **Conexión con Hacienda** (ambiente, usuario y contraseña de la API, llave .p12 y PIN), datos del negocio emisor (cédula, actividad económica, ubicación, sucursal, terminal), impresión, respaldos y restauración, verificación de integridad, bitácora y actualizaciones. |
 
 ---
 
@@ -59,7 +63,8 @@ Sistema de punto de venta y facturación para **Besalú Mercat — Minimarket Go
 | Precios de venta | Incluyen IVA. El sistema separa base e impuesto por línea: `base = total ÷ (1 + tarifa)`. |
 | Costos de compra | Sin IVA, como vienen en la factura del proveedor. |
 | Tarifas de IVA | 0 %, 0,5 %, 1 %, 2 %, 4 %, 8 % y 13 %. |
-| CABYS | 13 dígitos por producto (opcional al crear, necesario para Hacienda). |
+| CABYS | 13 dígitos por producto. Con Hacienda activo, un producto sin CABYS no se puede vender (Inventario lo marca). |
+| XML | Versión **4.4** de los Anexos y Estructuras, validado contra los XSD oficiales. Montos con 5 decimales: el IVA siempre es exactamente base × tarifa. |
 | IVA a pagar | **IVA cobrado en ventas − IVA devuelto en notas de crédito − IVA pagado en compras vigentes.** Si da negativo, es saldo a favor. Es la base para la declaración mensual: validala con el contador (proporcionalidad, gastos no deducibles, etc.). |
 | Inventario | Costo promedio ponderado. Cada movimiento (inicial, compra, venta, nota de crédito, ajuste, anulación) queda en el kárdex. |
 | Dinero | Se guarda en **céntimos enteros** (₡1 250,50 = 125050): sin errores de redondeo. |
@@ -79,6 +84,9 @@ alguien abra el archivo con otro programa, SQLite rechaza:
   misma clave).
 - Facturas de compra con fecha futura.
 - Tener dos turnos de caja abiertos.
+- Cambiar el XML de un comprobante una vez que Hacienda lo recibió, o cambiar
+  la respuesta de Hacienda (aceptado/rechazado es definitivo).
+- Reemplazar un comprobante que no fue rechazado, o reemplazarlo dos veces.
 
 Además:
 
@@ -115,8 +123,13 @@ besalu-mercat-pos/
 │   │   ├── reportes.js         ← IVA, balance, ventas, inventario, alertas.
 │   │   ├── respaldos.js        ← Copias verificadas y restauración.
 │   │   └── migracionV1.js      ← Importar productos de la versión 1.
-│   └── hacienda/
-│       └── conector.js         ← Cola de envío a Hacienda (lista para el proveedor).
+│   └── hacienda/               ← Conexión propia con Hacienda
+│       ├── catalogos.js        ← Códigos oficiales (tarifas, medios de pago, URLs…).
+│       ├── xml.js              ← XML 4.4 de tiquete, factura y nota de crédito.
+│       ├── firma.js            ← Llave .p12 y firma XAdES-EPES.
+│       ├── api.js              ← Token del IdP, envío y consulta de estado.
+│       ├── credenciales.js     ← Secretos cifrados con el sistema operativo.
+│       └── conector.js         ← Cola: firma, envía en orden, consulta, reintenta.
 │
 ├── interfaz/                   ← Lo que ve el cajero
 │   ├── index.html · estilos.css
@@ -126,6 +139,7 @@ besalu-mercat-pos/
 │       ├── app.js              ← Arranque, navegación y atajos.
 │       ├── caja.js · ventas.js · compras.js · inventario.js
 │       ├── reportes.js · cierre.js · ajustes.js
+│       ├── hacienda.js         ← Configuración, indicador y estado por comprobante.
 │       ├── ticket.js           ← Comprobante y reporte Z para imprimir.
 │       ├── graficos.js         ← Gráfico de ventas por día.
 │       └── actualizaciones.js  ← Aviso "Versión X lista → Reiniciar y actualizar".
@@ -133,7 +147,11 @@ besalu-mercat-pos/
 ├── recursos/                   ← Ícono, imagen y licencia del instalador.
 ├── pruebas/
 │   ├── datos.prueba.js         ← Reglas fiscales, protecciones, respaldos, velocidad.
-│   └── prueba-completa.js      ← La app real de punta a punta.
+│   ├── hacienda.prueba.js      ← XML, firma, envío, rechazos, sin internet, producción.
+│   ├── prueba-completa.js      ← La app real de punta a punta.
+│   ├── hacienda-simulada.js    ← Servidor que imita a Hacienda (verifica firma y XSD).
+│   ├── llave-prueba.js         ← Genera una llave .p12 falsa para probar.
+│   └── esquemas/               ← XSD oficiales v4.4 de Hacienda.
 ├── .github/workflows/release.yml ← Compila el .exe en GitHub y publica el Release.
 ├── package.json · GUIA-VERSIONES.md · DOCKER.md · README.md
 ```
@@ -165,14 +183,14 @@ IVA, el consecutivo y la clave los calcula el sistema con los datos de la base.
 | Tabla | Contenido |
 |---|---|
 | `productos` | Código, nombre, CABYS, unidad, tarifa IVA, precio (con IVA), costo promedio (sin IVA), existencia, mínimo, vencimiento. |
-| `comprobantes` / `comprobante_lineas` | Tiquetes, facturas y notas de crédito con consecutivo, clave, receptor, totales e IVA por línea. Estado de Hacienda. |
+| `comprobantes` / `comprobante_lineas` | Tiquetes, facturas y notas de crédito con consecutivo, clave, receptor, totales e IVA por línea. Estado en Hacienda, XML firmado y respuesta de Hacienda, y el reemplazo de un rechazado. |
 | `compras` / `compra_lineas` | Facturas de proveedores con número, clave, fecha, subtotal, IVA, total y el XML original. |
 | `movimientos` | Kárdex: cada entrada y salida de inventario con su documento. |
 | `secuencias` | Último número usado por tipo de comprobante. |
 | `turnos` | Turnos de caja con fondo, esperado, contado y diferencia. |
 | `clientes` · `proveedores` | Se guardan solos al facturar o registrar compras. |
 | `bitacora` | Registro de cada acción importante (no se puede borrar). |
-| `config` | Ajustes del negocio. |
+| `config` | Ajustes del negocio y conexión con Hacienda (secretos cifrados). |
 
 ---
 
@@ -213,11 +231,13 @@ de Windows.
 ## Primer uso
 
 1. La app abre en **Ajustes**: completar nombre, **cédula** del negocio,
-   teléfono, correo y dirección, y tocar **Guardar cambios**. Sin cédula no se
-   pueden emitir comprobantes.
-2. **Inventario → Agregar producto** (o registrar la primera compra en
-   **Compras**, que crea los productos nuevos).
-3. **Caja → Abrir caja** con el fondo inicial, y a vender.
+   **actividad económica**, provincia, cantón, distrito, dirección, teléfono y
+   correo, y tocar **Guardar cambios**. Sin cédula no se pueden emitir
+   comprobantes.
+2. Conectar **Hacienda** (ver la sección siguiente). Primero en **pruebas**.
+3. **Inventario → Agregar producto** con su **CABYS** (o registrar la primera
+   compra en **Compras**, que crea los productos nuevos).
+4. **Caja → Abrir caja** con el fondo inicial, y a vender.
 
 > Si venís de la versión 1, en Ajustes → **Versión anterior** aparece
 > **Importar esos productos** (solo productos; las ventas viejas no se mezclan con la
@@ -225,16 +245,89 @@ de Windows.
 
 ---
 
-## Hacienda (factura electrónica)
+## Hacienda: conexión propia
 
-Hoy el sistema **genera** cada comprobante con su consecutivo y clave y lo deja
-**pendiente de envío**. Todavía **no se envía** a Hacienda, por lo que esos
-comprobantes no tienen validez fiscal hasta conectar un proveedor.
+El POS se conecta **directo** a la API de Comprobantes Electrónicos de Hacienda,
+sin proveedor intermedio.
 
-Cuando se contrate un proveedor de facturación (o se active el ATV directo),
-se completa `principal/hacienda/conector.js`: firma el XML, lo envía y guarda la
-respuesta (aceptado/rechazado). La cola respeta el orden de los consecutivos y
-solo actualiza el estado, nunca los datos del comprobante.
+### Qué hace con cada venta
+
+```
+Cobrar ─▶ comprobante guardado (consecutivo + clave) ─▶ ticket impreso
+                │  en segundo plano, sin frenar la caja
+                ▼
+        XML 4.4 ─▶ firma XAdES-EPES (llave .p12) ─▶ POST /recepcion
+                                                      │
+          aceptado ◀── consulta GET /recepcion/{clave} ┘
+          rechazado ─▶ se ve el motivo ─▶ "Reemitir comprobante"
+```
+
+- Se envía **en el orden** en que se emitió (Hacienda valida la secuencia).
+- **Sin internet**: la venta no se detiene. El comprobante queda en cola, la
+  clave de los siguientes lleva la situación **3 · sin internet** y todo se
+  envía solo cuando vuelve la conexión (reintentos a los 30 s, 1, 2, 5, 10 y
+  15 minutos).
+- **Rechazado**: en Ventas se ve el motivo exacto que dio Hacienda. Después de
+  corregir la causa (por ejemplo el CABYS o la actividad económica), el botón
+  **Reemitir comprobante** emite uno nuevo con las mismas líneas y montos, un
+  consecutivo nuevo y la referencia al rechazado (tipo 10, código 07). No mueve
+  inventario ni caja, y en los reportes cuenta una sola vez.
+- **Error de envío** (Hacienda no recibió el XML): se ve la causa y el botón
+  **Reintentar envío** regenera el XML con los datos corregidos.
+- Se guardan el **XML firmado** y la **respuesta firmada de Hacienda** de cada
+  comprobante (Ventas → comprobante → *XML firmado* / *Respuesta de Hacienda*,
+  con los nombres `clave.xml` y `clave_respuesta.xml` que pide Hacienda).
+- El indicador de la barra superior dice si Hacienda está **al día**,
+  **enviando**, **sin conexión** o si hay **comprobantes por revisar**.
+
+### Qué se necesita (todo sale de TRIBU-CR)
+
+En la Oficina Virtual (OVi) de **TRIBU-CR**, con la cuenta del negocio:
+
+1. Estar inscrito como emisor de comprobantes electrónicos, con **sistema
+   propio** (en el XML va como *ProveedorSistemas* la misma cédula del negocio).
+2. **Llave criptográfica de pruebas** (archivo `.p12`) y su **PIN**.
+3. **Usuario y contraseña de pruebas** de la API
+   (`cpj-…@stag.comprobanteselectronicos.go.cr`).
+4. Más adelante, lo mismo **de producción** (`…@prod.comprobanteselectronicos.go.cr`).
+
+### Pasos
+
+1. **Ajustes → Facturación electrónica · Hacienda**: ambiente **Pruebas**,
+   usuario, contraseña, **Elegir archivo .p12…**, PIN, activar **Enviar
+   comprobantes a Hacienda** y **Guardar conexión**. Al guardar se abre la
+   llave con el PIN y se muestra a quién pertenece y cuándo vence.
+2. **Probar conexión** (pide un token a Hacienda).
+3. Hacer ventas de prueba y revisar en **Ventas** que queden **Aceptado**.
+4. Para facturar de verdad: **Empezar facturación real…**. Guarda la base de
+   pruebas completa en la carpeta de respaldos (`archivo-pruebas-hacienda-….sqlite`)
+   y arranca una base nueva con los mismos ajustes, productos (la existencia
+   actual queda como inventario inicial), clientes y proveedores. Luego se
+   ingresan las credenciales de **Producción**. La app no deja pasar a
+   producción con comprobantes de pruebas en la base.
+
+### Seguridad de las credenciales
+
+- La contraseña, la llave `.p12` y el PIN se guardan **cifrados con la cuenta
+  de Windows** (DPAPI, mediante `safeStorage` de Electron). En la base solo hay
+  texto cifrado: copiada a otra computadora no se puede leer (allí hay que
+  volver a ingresarlas).
+- Nunca se escriben en la bitácora ni en el registro de errores.
+- La interfaz no los recibe: el envío ocurre en el proceso principal.
+
+### Detalle técnico
+
+| | |
+|---|---|
+| Autenticación | OpenID Connect (Keycloak) con `grant_type=password`; realm `rut-stag` / cliente `api-stag` en pruebas, `rut` / `api-prod` en producción. El token se renueva con el *refresh token*. |
+| Envío | `POST https://api-sandbox.comprobanteselectronicos.go.cr/recepcion/v1/recepcion` (pruebas) o `https://api.comprobanteselectronicos.go.cr/recepcion/v1/recepcion` (producción), con el XML firmado en Base64. |
+| Firma | XAdES-EPES: C14N 1.0, RSA-SHA256, tres referencias SHA-256 (documento *enveloped*, KeyInfo, SignedProperties), política de firma de la *Resolución General sobre disposiciones técnicas* con su SHA-256. El XML se escribe ya canonicalizado. |
+| Pruebas | `npm run prueba:hacienda`: el XML se valida contra los **XSD oficiales v4.4**, la firma se verifica con una librería independiente (`xml-crypto`) y se compara con la canonicalización de `xmllint`; todo el flujo (envío, rechazo, reemisión, sin internet, credenciales malas, paso a producción) se prueba contra un servidor que imita a Hacienda. |
+
+> **Importante:** todo está probado contra los esquemas oficiales y un Hacienda
+> simulado. La primera prueba con el **sandbox real** se hace con las
+> credenciales de pruebas del negocio (Ajustes → Probar conexión y ventas de
+> prueba) antes de pasar a producción.
 
 ---
 
@@ -266,11 +359,16 @@ donde se esté trabajando, y no se buscan actualizaciones.
 ## Pruebas
 
 ```bash
-npm run prueba:datos   # 39 pruebas de reglas fiscales y protecciones
-npm run prueba:app     # 27 pruebas con la app real, de punta a punta
+npm run prueba            # las tres juntas
+npm run prueba:datos      # 39 pruebas de reglas fiscales y protecciones
+npm run prueba:hacienda   # 35 pruebas de la conexión con Hacienda
+npm run prueba:app        # 32 pruebas con la app real, de punta a punta
 ```
 
-Las dos usan una carpeta temporal y **no tocan** los datos del negocio.
+Todas usan una carpeta temporal y **no tocan** los datos del negocio. Las de
+Hacienda usan una llave `.p12` falsa y un Hacienda simulado en la propia
+computadora: no se conectan a Hacienda. Para validar contra los XSD se necesita
+`xmllint` (viene en macOS y Linux; si no está, esa parte se omite y se avisa).
 
 **`prueba:datos`** comprueba, entre otras cosas: que no se puede emitir sin
 cédula; el IVA por línea en cada tarifa; consecutivos y claves; que una venta
@@ -280,12 +378,23 @@ fecha futura; montos exactos del XML; el reporte de IVA y el balance; el arqueo;
 la detección y reparación de inventario; respaldos y restauración; y la
 velocidad con 2.000 ventas.
 
-**`prueba:app`** hace lo mismo que el personal: configura el negocio, crea un
+**`prueba:hacienda`** comprueba: que IVA = base × tarifa en 20 000 montos al
+azar y que el total del XML es lo cobrado; la lectura de la llave y el PIN; que
+tiquete, factura, nota de crédito y reemplazo cumplen el XSD oficial; que la
+firma es válida y detecta cualquier cambio; que los secretos no quedan en texto
+plano; las validaciones antes de emitir (CABYS, identificación del cliente,
+datos del emisor); el envío en orden y la aceptación; el rechazo con su motivo
+y la reemisión; el modo sin internet; contraseña incorrecta; error de esquema y
+reintento; y el paso a producción.
+
+**`prueba:app`** hace lo mismo que el personal: configura el negocio, conecta
+Hacienda desde Ajustes, crea un
 producto, importa una factura de proveedor en XML (y comprueba que no se puede
 registrar dos veces), abre caja, vende en efectivo con cambio, verifica que al
 imprimir solo sale el comprobante, factura a un cliente por SINPE, emite una
 nota de crédito, revisa el IVA y el balance en Reportes, cierra caja con Z,
-respalda, **reinicia la app** y comprueba que todo quedó guardado e íntegro.
+comprueba que Hacienda aceptó todo, respalda, **reinicia la app** y comprueba
+que todo quedó guardado e íntegro.
 
 ---
 
@@ -294,7 +403,7 @@ respalda, **reinicia la app** y comprueba que todo quedó guardado e íntegro.
 Resumen (detalle en **[GUIA-VERSIONES.md](GUIA-VERSIONES.md)**):
 
 ```bash
-npm version patch          # 2.0.0 → 2.0.1 (crea commit y tag)
+npm version patch          # 2.1.0 → 2.1.1 (crea commit y tag)
 git push --follow-tags     # GitHub compila el .exe y crea el Release (borrador)
 ```
 
@@ -332,6 +441,11 @@ Medido con las pruebas:
 
 ## Pendientes
 
-- **Proveedor de Hacienda**: conectar el envío de comprobantes (ver arriba).
+- **Primera prueba con el sandbox real de Hacienda** usando las credenciales
+  de pruebas del negocio.
+- **Enviar la factura al correo del cliente** (XML + PDF): Hacienda pide que el
+  emisor se la haga llegar al receptor. Hoy se descargan desde Ventas.
+- **Aceptar o rechazar las facturas de compra** ante Hacienda (Mensaje Receptor),
+  para respaldar el crédito fiscal.
 - **Firma de código** (quita el aviso "Editor desconocido"): ver GUIA-VERSIONES.md.
 - **Logo real** del negocio para el ícono y el instalador (`recursos/`).

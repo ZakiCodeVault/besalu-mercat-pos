@@ -26,7 +26,7 @@ function ventas(desde, hasta) {
   const d = datos.conexion.obtener();
   const filas = [['Tipo', 'Consecutivo', 'Clave', 'Fecha', 'Cliente', 'Identificación', 'Medio de pago',
     'Base 13%', 'IVA 13%', 'Base 4%', 'IVA 4%', 'Base 2%', 'IVA 2%', 'Base 1%', 'IVA 1%', 'Exento',
-    'Total sin IVA', 'Total IVA', 'Total', 'Referencia', 'Estado Hacienda']];
+    'Total sin IVA', 'Total IVA', 'Total', 'Referencia', 'Estado Hacienda', 'Reemplazado por', 'Cuenta en reportes']];
   const comprobantes = d.prepare(`SELECT * FROM comprobantes WHERE substr(fecha_emision,1,10) BETWEEN ? AND ? ORDER BY id`).all(desde, hasta);
   const porTarifa = d.prepare('SELECT tarifa_iva AS t, sum(subtotal) AS b, sum(impuesto) AS i FROM comprobante_lineas WHERE comprobante_id = ? GROUP BY tarifa_iva');
   for (const c of comprobantes) {
@@ -35,10 +35,11 @@ function ventas(desde, hasta) {
     for (const r of porTarifa.all(c.id)) t[r.t] = r;
     const g = (tar, k) => colones(signo * ((t[tar] && t[tar][k]) || 0));
     const ref = c.referencia_id ? (d.prepare('SELECT consecutivo FROM comprobantes WHERE id = ?').get(c.referencia_id) || {}).consecutivo : '';
+    const reemplazo = (d.prepare('SELECT consecutivo FROM comprobantes WHERE sustituye_id = ?').get(c.id) || {}).consecutivo || '';
     filas.push([TIPO[c.tipo], c.consecutivo, c.clave, c.fecha_emision.slice(0, 19).replace('T', ' '),
       c.receptor_nombre || 'Consumidor final', c.receptor_identificacion || '', c.medio_pago,
       g(13, 'b'), g(13, 'i'), g(4, 'b'), g(4, 'i'), g(2, 'b'), g(2, 'i'), g(1, 'b'), g(1, 'i'), g(0, 'b'),
-      colones(signo * c.total_venta), colones(signo * c.total_impuesto), colones(signo * c.total_comprobante), ref || '', c.estado_hacienda]);
+      colones(signo * c.total_venta), colones(signo * c.total_impuesto), colones(signo * c.total_comprobante), ref || '', c.estado_hacienda, reemplazo, reemplazo ? 'No (rechazado y reemplazado)' : 'Sí']);
   }
   return csv(filas);
 }

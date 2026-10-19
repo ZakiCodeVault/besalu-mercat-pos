@@ -19,6 +19,7 @@ function amigable(e) {
   if (m.includes('UNIQUE constraint failed: compras')) return 'Esta factura de compra ya fue registrada';
   if (m.includes('FOREIGN KEY constraint failed')) return 'No se puede: hay registros que dependen de este';
   if (m.startsWith('CHECK constraint failed')) return 'Dato inválido: ' + m.replace('CHECK constraint failed: ', '');
+  if (m.includes('UNIQUE constraint failed: comprobantes.sustituye_id')) return 'Este comprobante ya fue reemplazado';
   return m;
 }
 
@@ -63,10 +64,13 @@ function registrar(ctx) {
   manejar('productos:kardex', (id) => productos.kardex(id));
 
   /* ---- ventas ---- */
-  manejar('ventas:emitir', (v) => ventas.emitir(v));
+  // Después de emitir, el comprobante se envía a Hacienda en segundo plano (no frena la caja)
+  const yEnviar = (c) => { hacienda.procesarPronto(); return c; };
+  manejar('ventas:emitir', (v) => yEnviar(ventas.emitir(v)));
   manejar('ventas:listar', (f) => ventas.listar(f || {}));
   manejar('ventas:obtener', (id) => ventas.obtenerPorId(id));
-  manejar('ventas:notaCredito', (id, razon) => ventas.notaCredito(id, razon));
+  manejar('ventas:notaCredito', (id, razon) => yEnviar(ventas.notaCredito(id, razon)));
+  manejar('ventas:reemitir', (id, cambios) => yEnviar(ventas.reemitir(id, cambios || {})));
   manejar('clientes:buscar', (t) => ventas.buscarClientes(t));
 
   /* ---- compras ---- */
@@ -99,14 +103,16 @@ function registrar(ctx) {
   /* ---- respaldos ---- */
   manejar('respaldos:crear', () => respaldos.crear('manual'));
   manejar('respaldos:listar', () => respaldos.listar());
-  manejar('respaldos:restaurar', (nombre) => respaldos.restaurar(nombre));
+  manejar('respaldos:restaurar', async (nombre) => { const r = await respaldos.restaurar(nombre); hacienda.reiniciar(); return r; });
   manejar('respaldos:restaurarArchivo', async () => {
     const r = await dialog.showOpenDialog(ctx.ventana(), {
       title: 'Elegir respaldo para restaurar', properties: ['openFile'],
       filters: [{ name: 'Respaldo de Besalú (.sqlite)', extensions: ['sqlite'] }]
     });
     if (r.canceled || !r.filePaths[0]) return null;
-    return respaldos.restaurar(r.filePaths[0]);
+    const restaurado = await respaldos.restaurar(r.filePaths[0]);
+    hacienda.reiniciar();
+    return restaurado;
   });
   manejar('respaldos:elegirCarpeta', async () => {
     const r = await dialog.showOpenDialog(ctx.ventana(), { title: 'Carpeta extra para respaldos (USB, OneDrive...)', properties: ['openDirectory', 'createDirectory'] });
@@ -135,6 +141,38 @@ function registrar(ctx) {
 
   /* ---- Hacienda ---- */
   manejar('hacienda:estado', () => hacienda.estado());
+  manejar('hacienda:elegirLlave', async () => {
+    const r = await dialog.showOpenDialog(ctx.ventana(), {
+      title: 'Elegir la llave criptográfica de Hacienda', properties: ['openFile'],
+      filters: [{ name: 'Llave criptográfica (.p12)', extensions: ['p12', 'pfx'] }]
+    });
+    if (r.canceled || !r.filePaths[0]) return null;
+    const archivo = r.filePaths[0];
+    if (fs.statSync(archivo).size > 64 * 1024) throw new Error('Ese archivo no parece una llave criptográfica (.p12)');
+    return hacienda.elegirLlave(fs.readFileSync(archivo), path.basename(archivo));
+  });
+  manejar('hacienda:guardar', (c) => hacienda.guardarConfiguracion(c || {}));
+  manejar('hacienda:probar', () => hacienda.probarConexion());
+  manejar('hacienda:procesar', async () => { await hacienda.procesar(); return hacienda.estado(); });
+  manejar('hacienda:reintentar', (id) => hacienda.reintentar(id));
+  manejar('hacienda:guardarXml', async (id, cual) => {
+    const c = ventas.obtenerPorId(id);
+    if (!c) throw new Error('El comprobante no existe');
+    const contenido = cual === 'respuesta' ? c.hacienda_respuesta : c.xml_firmado;
+    if (!contenido) throw new Error(cual === 'respuesta' ? 'Todavía no hay respuesta de Hacienda' : 'El XML todavía no se ha generado');
+    const nombre = c.clave + (cual === 'respuesta' ? '_respuesta' : '') + '.xml';   // nombres que pide Hacienda
+    const r = await dialog.showSaveDialog(ctx.ventana(), {
+      title: 'Guardar XML', defaultPath: path.join(app.getPath('documents'), nombre), filters: [{ name: 'XML', extensions: ['xml'] }]
+    });
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, contenido, 'utf8');
+    return { ruta: r.filePath };
+  });
+  manejar('hacienda:empezarProduccion', async () => {
+    const r = await respaldos.empezarBaseNueva('pruebas-hacienda');
+    hacienda.reiniciar();
+    return r;
+  });
 }
 
 module.exports = { registrar };

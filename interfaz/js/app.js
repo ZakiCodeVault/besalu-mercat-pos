@@ -4,7 +4,7 @@
  * Estado compartido (App): ajustes del negocio, turno de caja y catálogo de
  * productos (en memoria para que escanear sea instantáneo).
  */
-const App = { vista: 'caja', ajustes: {}, turno: null, catalogo: [] };
+const App = { vista: 'caja', ajustes: {}, turno: null, catalogo: [], hacienda: null };
 
 const PANTALLAS = [
   { v: 'caja', ic: 'receipt', t: 'Caja', tecla: 'F1', titulo: 'Caja', render: () => renderCaja() },
@@ -25,7 +25,7 @@ App.recargarCatalogo = async function () {
 /** Después de restaurar un respaldo: recarga todo desde la base. */
 App.reiniciarEstado = async function () {
   const e = await intentar(() => BESALU.sistema.estado());
-  if (e) { App.ajustes = e.ajustes; App.turno = e.turno; }
+  if (e) { App.ajustes = e.ajustes; App.turno = e.turno; App.hacienda = e.hacienda; pintarIndicadorHacienda(); }
   Caja.carrito = []; Caja.hecho = null; Caja.cliente = null;
   await App.recargarCatalogo();
   actualizarIndicadorCaja();
@@ -87,12 +87,14 @@ async function iniciar() {
   if (!estado) return;
   App.ajustes = estado.ajustes;
   App.turno = estado.turno;
+  App.hacienda = estado.hacienda;
   await App.recargarCatalogo();
   $('#app').hidden = false;
   $('#shiftpill').onclick = () => (App.turno ? go('cierre') : modalAbrirCaja());
   actualizarIndicadorCaja();
   reloj(); setInterval(reloj, 15000);
   iniciarAvisoActualizaciones();
+  iniciarAvisoHacienda();
   go(estado.ajustes.cedula ? 'caja' : 'ajustes');
   if (!estado.ajustes.cedula) toast('Bienvenido: complete los datos del negocio', 'ok', 'La cédula es necesaria para emitir comprobantes');
   if (estado.integridad && !estado.integridad.ok) toast('Revise la integridad de los datos', 'err', estado.integridad.problemas[0]);

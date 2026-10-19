@@ -1,5 +1,6 @@
 /**
- * ajustes.js — Configuración, respaldos, integridad y Hacienda (F7).
+ * ajustes.js — Configuración, Hacienda, respaldos e integridad (F7).
+ * La tarjeta de Hacienda está en hacienda.js.
  */
 async function renderAjustes() {
   const root = $('#v-ajustes');
@@ -16,13 +17,18 @@ async function renderAjustes() {
   const interruptor = (k) => { const i = el('input', { type: 'checkbox' }); i.checked = !!a[k]; f[k] = i; return el('label', { class: 'sw' }, [i, el('span', { class: 'tr' })]); };
   f.tipoCedula = selector(TIPOS_ID.slice(0, 4), a.tipoCedula);
   f.ticket = selector(['80 mm', '58 mm'], a.ticket);
+  f.provincia = selector([['', 'Elegir…'], ...PROVINCIAS], a.provincia || '');
 
   const g = el('div', { class: 'cfg-grid' });
+  App.hacienda = estado.hacienda; pintarIndicadorHacienda();
+  g.appendChild(tarjetaHacienda(estado.hacienda, renderAjustes));
   g.appendChild(el('div', { class: 'card glass' }, [el('h2', { text: 'Datos del negocio (emisor)' }),
     campo('Nombre o razón social', txt('negocio')), campo('Nombre comercial (opcional)', txt('nombreComercial')),
     el('div', { class: 'g2' }, [campo('Tipo de identificación', f.tipoCedula), campo('Número de cédula', txt('cedula', { placeholder: 'Obligatorio para emitir' }))]),
-    el('div', { class: 'g2' }, [campo('Actividad económica', txt('actividadEconomica', { placeholder: 'Código de Hacienda' })), campo('Teléfono', txt('telefono'))]),
-    campo('Correo', txt('correo')), campo('Dirección', txt('direccion')),
+    el('div', { class: 'g2' }, [campo('Actividad económica', txt('actividadEconomica', { placeholder: '6 caracteres, como en TRIBU-CR' })), campo('Teléfono', txt('telefono'))]),
+    campo('Correo (aquí llegan las respuestas de los clientes)', txt('correo')),
+    el('div', { class: 'g3' }, [campo('Provincia', f.provincia), campo('Cantón', txt('canton', { inputmode: 'numeric', placeholder: '01' })), campo('Distrito', txt('distrito', { inputmode: 'numeric', placeholder: '01' }))]),
+    el('div', { class: 'g2' }, [campo('Barrio (opcional)', txt('barrio')), campo('Dirección (otras señas)', txt('direccion'))]),
     el('div', { class: 'g2' }, [campo('Sucursal', txt('sucursal')), campo('Terminal (caja)', txt('terminal'))]),
     el('div', { class: 'note', html: 'La cédula, sucursal y terminal forman el <b>consecutivo</b> y la <b>clave</b> de cada comprobante. No los cambie después de empezar a facturar.' })]));
 
@@ -51,9 +57,8 @@ async function renderAjustes() {
     respaldos && respaldos.length ? el('div', { class: 'tabla-wrap', style: 'border:1px solid var(--line);max-height:220px' }, el('table', {}, tbResp)) : null,
     el('div', { class: 'note', text: 'Automático: una vez al día y al cerrar caja. Se guardan los últimos 60. Cada respaldo se verifica al crearlo.' })]));
 
-  /* ---- integridad, Hacienda, otros ---- */
+  /* ---- integridad y otros ---- */
   const integ = estado.integridad;
-  const h = estado.hacienda;
   g.appendChild(el('div', { class: 'card glass' }, [el('h2', { text: 'Integridad y auditoría' }),
     fila('Verificación al abrir', el('span', { class: 'pill ' + (integ && integ.ok ? 'pill--green' : 'pill--red'), text: integ && integ.ok ? 'Todo en orden' : 'Revisar' })),
     integ && !integ.ok ? el('div', { class: 'note', style: 'background:var(--neg-soft)', text: integ.problemas.join(' · ') }) : null,
@@ -61,10 +66,6 @@ async function renderAjustes() {
       el('button', { class: 'btn btn--ghost btn--sm', onclick: verificarAhora }, [icon('shield', 15), 'Verificar ahora']),
       el('button', { class: 'btn btn--ghost btn--sm', onclick: verBitacora }, [icon('list', 15), 'Ver bitácora'])]),
     el('div', { class: 'note', text: 'Las ventas, compras y movimientos de inventario no se pueden modificar ni borrar: la base de datos lo impide. Toda acción queda en la bitácora.' }),
-    el('h2', { text: 'Hacienda', style: 'margin-top:18px' }),
-    fila('Proveedor de facturación', el('span', { class: 'pill ' + (h.configurado ? 'pill--green' : 'pill--amber'), text: h.configurado ? h.proveedor : 'Sin configurar' })),
-    fila('Comprobantes pendientes de envío', el('span', { class: 'pill', text: String(h.conteo.pendiente + h.conteo.error) })),
-    el('div', { class: 'note', html: h.configurado ? '' : 'Los comprobantes se emiten con su <b>consecutivo y clave</b> y quedan pendientes: <b>todavía no tienen validez ante Hacienda</b>. Al activar el proveedor (p. ej. Alanube) se enviarán todos en orden.' }),
     estado.versionAnterior && estado.versionAnterior.productos ? el('div', { style: 'margin-top:14px' }, [
       el('h2', { text: 'Versión anterior' }),
       el('div', { class: 'mini', style: 'margin-bottom:8px', text: 'Se encontraron ' + estado.versionAnterior.productos + ' productos de la versión 1.0.' }),

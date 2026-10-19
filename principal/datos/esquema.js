@@ -250,6 +250,36 @@ const MIGRACIONES = [
   BEGIN SELECT RAISE(ABORT, 'La bitácora no se puede modificar'); END;
   CREATE TRIGGER bitacora_no_borrar BEFORE DELETE ON bitacora
   BEGIN SELECT RAISE(ABORT, 'La bitácora no se puede borrar'); END;
+  `,
+
+  /* ===== Versión 2: conexión directa con Hacienda ===== */
+  `
+  -- Comprobante que reemplaza a uno rechazado por Hacienda (mismas líneas y montos)
+  ALTER TABLE comprobantes ADD COLUMN sustituye_id INTEGER REFERENCES comprobantes(id);
+  ALTER TABLE comprobantes ADD COLUMN hacienda_mensaje   TEXT;   -- detalle legible de la respuesta
+  ALTER TABLE comprobantes ADD COLUMN hacienda_ambiente  TEXT;   -- pruebas / produccion
+  ALTER TABLE comprobantes ADD COLUMN hacienda_siguiente TEXT;   -- próximo intento (reintentos)
+  CREATE UNIQUE INDEX comprobantes_sustituye ON comprobantes(sustituye_id) WHERE sustituye_id IS NOT NULL;
+
+  CREATE TRIGGER comprobantes_sustituye_inmutable BEFORE UPDATE OF sustituye_id ON comprobantes
+  BEGIN SELECT RAISE(ABORT, 'Comprobante emitido: no se puede modificar (use una nota de crédito)'); END;
+  -- Solo se reemplaza un comprobante que Hacienda rechazó
+  CREATE TRIGGER comprobantes_sustituye_rechazado BEFORE INSERT ON comprobantes
+  WHEN NEW.sustituye_id IS NOT NULL
+   AND coalesce((SELECT estado_hacienda FROM comprobantes WHERE id = NEW.sustituye_id), '') <> 'rechazado'
+  BEGIN SELECT RAISE(ABORT, 'Solo se puede reemplazar un comprobante rechazado por Hacienda'); END;
+  -- El XML firmado no cambia una vez que Hacienda lo recibió
+  CREATE TRIGGER comprobantes_xml_inmutable BEFORE UPDATE OF xml_firmado ON comprobantes
+  WHEN OLD.xml_firmado IS NOT NULL AND OLD.estado_hacienda NOT IN ('pendiente','error')
+   AND NEW.xml_firmado IS NOT OLD.xml_firmado
+  BEGIN SELECT RAISE(ABORT, 'El XML ya fue enviado a Hacienda: no se puede modificar'); END;
+  -- La respuesta final de Hacienda (aceptado o rechazado) no se puede cambiar
+  CREATE TRIGGER comprobantes_estado_final BEFORE UPDATE OF estado_hacienda ON comprobantes
+  WHEN OLD.estado_hacienda IN ('aceptado','rechazado') AND NEW.estado_hacienda <> OLD.estado_hacienda
+  BEGIN SELECT RAISE(ABORT, 'La respuesta de Hacienda es definitiva: no se puede cambiar'); END;
+  CREATE TRIGGER comprobantes_respuesta_final BEFORE UPDATE OF hacienda_respuesta ON comprobantes
+  WHEN OLD.hacienda_respuesta IS NOT NULL AND NEW.hacienda_respuesta IS NOT OLD.hacienda_respuesta
+  BEGIN SELECT RAISE(ABORT, 'La respuesta de Hacienda es definitiva: no se puede cambiar'); END;
   `
 ];
 

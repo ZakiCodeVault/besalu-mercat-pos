@@ -36,14 +36,15 @@ async function renderVentas() {
   if (!lista.length) tb.appendChild(el('tr', {}, el('td', { colspan: 7, class: 'mini', style: 'text-align:center;padding:30px', text: 'No hay comprobantes en este período.' })));
   for (const c of lista) {
     const est = ESTADO_HACIENDA[c.estado_hacienda] || [c.estado_hacienda, ''];
-    tb.appendChild(el('tr', { class: 'clic' + (c.nota_credito ? ' tachado' : ''), onclick: () => verComprobante(c.id) }, [
+    const nota = c.nota_credito ? 'Con nota de crédito' : c.sustituido_por ? 'Reemplazado por ' + Number(c.sustituido_por.slice(-10)) : c.sustituye_id ? 'Reemplazo' : '';
+    tb.appendChild(el('tr', { class: 'clic' + (c.nota_credito || c.sustituido_por ? ' tachado' : ''), onclick: () => verComprobante(c.id) }, [
       el('td', {}, [el('div', { style: 'font-weight:600', text: NOMBRE_TIPO[c.tipo] + ' ' + Number(c.consecutivo.slice(-10)) }), el('div', { class: 'mini', text: fechaHora(c.fecha_emision) })]),
       el('td', { class: 'mini', text: c.receptor_nombre || 'Consumidor final' }),
       el('td', {}, el('span', { class: 'pill', text: (MEDIOS[c.medio_pago] || [c.medio_pago])[0] })),
       el('td', { class: 'der mini', text: money(c.total_impuesto) }),
       el('td', { class: 'der', style: 'font-weight:700' + (c.tipo === '03' ? ';color:var(--neg)' : ''), text: (c.tipo === '03' ? '-' : '') + money(c.total_comprobante) }),
       el('td', {}, el('span', { class: 'pill ' + est[1], text: est[0] })),
-      el('td', { class: 'mini', text: c.nota_credito ? 'Con nota de crédito' : '' })
+      el('td', { class: 'mini', text: nota })
     ]));
   }
   root.appendChild(el('div', { class: 'card pad0 glass' }, el('div', { class: 'tabla-wrap' }, el('table', {}, [
@@ -55,11 +56,12 @@ async function verComprobante(id) {
   if (!c) return;
   const acciones = [el('button', { class: 'btn btn--ghost', onclick: () => imprimir(armarComprobante(c)) }, [icon('printer', 17), 'Reimprimir']),
     el('button', { class: 'btn btn--accent', onclick: cerrarModal }, 'Cerrar')];
-  if (c.tipo !== '03' && !c.nota_credito) acciones.unshift(el('button', { class: 'btn btn--danger-ghost', style: 'margin-right:auto', onclick: () => emitirNotaCredito(c) }, [icon('undo', 16), 'Nota de crédito']));
+  if (c.tipo !== '03' && !c.nota_credito && c.estado_hacienda !== 'rechazado') acciones.unshift(el('button', { class: 'btn btn--danger-ghost', style: 'margin-right:auto', onclick: () => emitirNotaCredito(c) }, [icon('undo', 16), 'Nota de crédito']));
   abrirModal(el('div', { class: 'modal' }, [
     el('div', { class: 'card-t' }, [el('h2', { text: NOMBRE_TIPO[c.tipo] + ' ' + Number(c.consecutivo.slice(-10)) }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
     c.nota_credito ? el('div', { class: 'note', style: 'margin:0 0 12px', html: 'Anulada con la nota de crédito <b>' + c.nota_credito.consecutivo + '</b> · ' + c.nota_credito.referencia_razon }) : null,
     el('div', { style: 'display:grid;place-items:center' }, armarComprobante(c)),
+    seccionHacienda(c, (otro) => { cerrarModal(); renderVentas(); if (otro) verComprobante(otro); else verComprobante(c.id); }),
     el('div', { class: 'modal-acc' }, acciones)]));
 }
 

@@ -7,13 +7,14 @@
  *   3. Abre la ventana del POS.
  *   4. Hace el respaldo diario y busca actualizaciones.
  */
-const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, ipcMain, dialog, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const log = require('electron-log');
 const { autoUpdater } = require('electron-updater');
 const datos = require('./datos');
 const ipc = require('./ipc');
+const hacienda = require('./hacienda/conector');
 
 log.transports.file.level = 'info';
 autoUpdater.logger = log;
@@ -68,6 +69,28 @@ function recuperarDesdeRespaldo(carpeta, error) {
   for (const s of ['-wal', '-shm']) fs.rmSync(actual + s, { force: true });
   fs.copyFileSync(path.join(dir, lista[0]), actual);
   return true;
+}
+
+/* ---------------- Hacienda ---------------- */
+/** Cifrado de las credenciales con el sistema operativo (DPAPI en Windows). */
+function cifradorDelSistema() {
+  // Solo para las pruebas automáticas de desarrollo (nunca en la app instalada)
+  if (!app.isPackaged && process.env.BESALU_CIFRADO_PRUEBA === '1') {
+    return { disponible: () => true, cifrar: (t) => 'prueba:' + Buffer.from(t, 'utf8').toString('base64'),
+      descifrar: (c) => Buffer.from(String(c).replace(/^prueba:/, ''), 'base64').toString('utf8') };
+  }
+  return {
+    disponible: () => safeStorage.isEncryptionAvailable(),
+    cifrar: (t) => safeStorage.encryptString(String(t)).toString('base64'),
+    descifrar: (c) => safeStorage.decryptString(Buffer.from(c, 'base64'))
+  };
+}
+
+function iniciarHacienda() {
+  // Las pruebas automáticas apuntan a un servidor simulado (nunca en la app instalada)
+  const urls = !app.isPackaged && process.env.BESALU_HACIENDA_URLS ? JSON.parse(process.env.BESALU_HACIENDA_URLS) : null;
+  hacienda.configurar({ cifrador: cifradorDelSistema(), urls, alCambiar: (e) => enviar('hacienda', e) });
+  hacienda.iniciar(urls ? 2000 : 30000);
 }
 
 /* ---------------- Ventana ---------------- */
@@ -125,6 +148,7 @@ if (!app.requestSingleInstanceLock()) {
     const carpeta = app.getPath('userData');
     try { abrirBase(carpeta); } catch (e) { app.exit(1); return; }
     ipc.registrar({ ventana: () => ventana, estadoInicio, carpetaDatos: carpeta });
+    iniciarHacienda();
     configurarSistema();
     crearVentana();
     // Respaldo diario (y revisa cada hora por si la caja queda abierta varios días)
@@ -134,6 +158,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on('window-all-closed', () => {
+    hacienda.detener();
     datos.conexion.cerrar();   // cierra limpio (vuelca el WAL al archivo)
     app.quit();
   });
