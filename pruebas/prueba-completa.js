@@ -3,11 +3,11 @@
  *
  * Usa una carpeta de datos temporal (no toca los datos del negocio) y recorre el
  * día de trabajo: configurar negocio → conectar Hacienda → producto → compra desde
- * XML → abrir caja → vender → facturar → nota de crédito → Hacienda acepta → IVA →
- * cierre Z → respaldo → reiniciar.
+ * XML → abrir caja → vender → facturar → nota de crédito → Hacienda acepta → la
+ * factura llega sola al correo del cliente → IVA → cierre Z → respaldo → reiniciar.
  *
- * Hacienda es un servidor local simulado (verifica firma y XSD) y la llave .p12
- * es falsa: nada sale de esta computadora.
+ * Hacienda y el servidor de correo son servidores locales simulados (Hacienda
+ * verifica firma y XSD) y la llave .p12 es falsa: nada sale de esta computadora.
  *
  * Uso:  npm run prueba:app
  */
@@ -18,6 +18,7 @@ const fs = require('fs');
 
 const { generarLlavePrueba } = require('./llave-prueba');
 const { crearSimulador } = require('./hacienda-simulada');
+const { crearSmtp } = require('./smtp-simulado');
 
 const carpeta = fs.mkdtempSync(path.join(os.tmpdir(), 'besalu-app-'));
 app.setPath('userData', carpeta);
@@ -34,7 +35,7 @@ process.env.BESALU_HACIENDA_URLS = JSON.stringify({ token: base + '/token', cerr
 process.env.BESALU_CIFRADO_PRUEBA = '1';
 require('electron').dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [archivoLlave] });   // "Elegir archivo .p12…"
 require('../principal/main.js');
-let sim = null;
+let sim = null, smtp = null;
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 const resultados = [];
@@ -135,6 +136,22 @@ async function correr() {
   await js(`__boton('Probar conexión', document.querySelector('.hacienda-card')).click(); true`); await esperar(600);
   verificar('Probar conexión con Hacienda', await js("App.hacienda.enLinea === true"));
 
+  // ---- Correo del negocio para enviar las facturas (SMTP simulado) ----
+  smtp = await crearSmtp({ usuario: 'facturas@besalu.cr', contrasena: 'clave-del-buzon', modo: 'plano' });
+  await js(`const t = document.querySelector('.correo-card');
+    __escribir(__campo('Servidor SMTP', t), '127.0.0.1');
+    __escribir(__campo('Seguridad', t), 'ninguna');
+    __escribir(__campo('Puerto', t), '${smtp.puerto}');
+    __escribir(__campo('Usuario (correo completo)', t), 'facturas@besalu.cr');
+    __escribir(__campo('Contraseña', t), 'clave-del-buzon');
+    __campo('Enviar cada factura aceptada al cliente', t).checked = true;
+    __boton('Guardar correo', t).click(); true`);
+  await esperar(600);
+  const ce = await js("({ activo: App.hacienda.correo.activo, remitente: App.hacienda.correo.remitente, pill: document.querySelector('.correo-card .card-t .pill').textContent })");
+  verificar('Configurar el correo SMTP del negocio (Ajustes)', ce.activo && ce.remitente === 'facturas@besalu.cr' && ce.pill === 'Activo', ce.pill + ' · ' + ce.remitente);
+  await js(`__boton('Enviar correo de prueba', document.querySelector('.correo-card')).click(); true`); await esperar(800);
+  verificar('Correo de prueba al negocio', smtp.mensajes.length === 1 && smtp.mensajes[0].para.includes('facturas@besalu.cr'), smtp.mensajes[0] && smtp.mensajes[0].asunto);
+
   // ---- Producto nuevo ----
   await js(`go('inventario'); true`); await esperar(300);
   await js(`modalProducto(); const m = __modal();
@@ -189,6 +206,7 @@ async function correr() {
   // ---- Factura a cliente (SINPE) ----
   await js(`nuevaVenta(); modalCliente(); const m = __modal();
     __escribir(__campo('Identificación', m), '1-1234-5678'); __escribir(__campo('Nombre o razón social', m), 'Ana Mora');
+    __escribir(__campo('Correo (opcional)', m), 'ana@correo.cr');
     __boton('Usar para la factura', m).click(); true`);
   await js(`const c = document.getElementById('cod'); c.value = 'galletas'; __enter(c); c.value = '7441099900011'; __enter(c);
     __boton('SINPE', document.querySelector('.metodos')).click(); true`);
@@ -233,10 +251,26 @@ async function correr() {
   const hz = await js("(async () => { const l = await BESALU.ventas.listar({}); return { n: l.length, estados: [...new Set(l.map(c => c.estado_hacienda))].join(',') }; })()");
   verificar('Hacienda aceptó los ' + hz.n + ' comprobantes (enviados solos, en segundo plano)', pendientes === 0 && sim.recibidos.length === hz.n && !sim.errores.length,
     hz.estados + (sim.errores.length ? ' · ' + sim.errores[0] : ''));
+  let enviada = null;
+  for (let i = 0; i < 40 && !(enviada && enviada.correo_estado === 'enviado'); i++) {
+    await esperar(250);
+    enviada = await js("(async () => { const l = await BESALU.ventas.listar({}); const c = await BESALU.ventas.obtener(l.find(c => c.tipo === '01').id); return { correo_estado: c.correo_estado, clave: c.clave }; })()");
+  }
+  const alCliente = () => smtp.mensajes.filter((m) => m.para.includes('ana@correo.cr'));
+  const adjuntos = alCliente()[0] ? alCliente()[0].partes.filter((p) => p.archivo).map((p) => p.archivo) : [];
+  verificar('La factura aceptada llegó sola al correo del cliente (PDF, XML firmado y respuesta)', enviada.correo_estado === 'enviado' && alCliente().length === 1 &&
+    adjuntos.join() === [enviada.clave + '.pdf', enviada.clave + '.xml', enviada.clave + '_respuesta.xml'].join(), adjuntos.map((a) => a.slice(41)).join(', '));
   await js(`go('ventas'); true`); await esperar(500);
   await js(`(async () => { const l = await BESALU.ventas.listar({}); await verComprobante(l.find(c => c.tipo === '01').id); })(); true`); await esperar(500);
   const sec = await js("({ texto: __modal().querySelector('.hseccion').textContent, botones: [...__modal().querySelectorAll('.hseccion button')].map(b => b.textContent) })");
   verificar('El comprobante muestra "Aceptado" y permite guardar el XML firmado y la respuesta', sec.texto.includes('Aceptado (pruebas)') && sec.botones.includes('XML firmado') && sec.botones.includes('Respuesta de Hacienda'), sec.botones.join(' · '));
+  verificar('Ventas muestra el correo enviado y el botón "Reenviar por correo"', sec.texto.includes('Enviada a ana@correo.cr') && sec.botones.includes('Reenviar por correo'));
+  await js(`__boton('Reenviar por correo', __modal()).click(); true`); await esperar(200);
+  const destino = await js("__modal().querySelector('input').value");
+  await js(`__boton('Enviar', __modal()).click(); true`);
+  for (let i = 0; i < 20 && alCliente().length < 2; i++) await esperar(200);
+  await esperar(300);
+  verificar('"Reenviar por correo" la envía otra vez', destino === 'ana@correo.cr' && alCliente().length === 2 && await js("!!__modal() && __modal().textContent.includes('Enviada a ana@correo.cr')"), 'a ' + destino);
   await js('while (hayModal()) cerrarModal(); true');
   verificar('Indicador "Hacienda al día"', await js("document.getElementById('hpill').textContent.includes('al día')"));
 
@@ -275,7 +309,7 @@ async function correr() {
 
   const fallas = resultados.filter((r) => !r.ok).length;
   console.log('\n' + (fallas ? '✘ ' + fallas + ' prueba(s) fallaron' : '✔ Todas las pruebas pasaron (' + resultados.length + ')') + '\n');
-  try { await sim.cerrar(); require('../principal/hacienda/conector').detener(); require('../principal/datos').conexion.cerrar(); fs.rmSync(carpeta, { recursive: true, force: true }); } catch (e) {}
+  try { await sim.cerrar(); await smtp.cerrar(); require('../principal/hacienda/conector').detener(); require('../principal/datos').conexion.cerrar(); fs.rmSync(carpeta, { recursive: true, force: true }); } catch (e) {}
   app.exit(fallas ? 1 : 0);
 }
 

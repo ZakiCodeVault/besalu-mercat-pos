@@ -87,9 +87,10 @@ function cifradorDelSistema() {
 }
 
 function iniciarHacienda() {
-  // Las pruebas automáticas apuntan a un servidor simulado (nunca en la app instalada)
+  // Las pruebas automáticas apuntan a servidores simulados (nunca en la app instalada)
   const urls = !app.isPackaged && process.env.BESALU_HACIENDA_URLS ? JSON.parse(process.env.BESALU_HACIENDA_URLS) : null;
-  hacienda.configurar({ cifrador: cifradorDelSistema(), urls, alCambiar: (e) => enviar('hacienda', e) });
+  const smtp = !app.isPackaged && process.env.BESALU_SMTP_PRUEBA ? JSON.parse(process.env.BESALU_SMTP_PRUEBA) : null;
+  hacienda.configurar({ cifrador: cifradorDelSistema(), urls, smtp, alCambiar: (e) => enviar('hacienda', e) });
   hacienda.iniciar(urls ? 2000 : 30000);
 }
 

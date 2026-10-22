@@ -280,6 +280,19 @@ const MIGRACIONES = [
   CREATE TRIGGER comprobantes_respuesta_final BEFORE UPDATE OF hacienda_respuesta ON comprobantes
   WHEN OLD.hacienda_respuesta IS NOT NULL AND NEW.hacienda_respuesta IS NOT OLD.hacienda_respuesta
   BEGIN SELECT RAISE(ABORT, 'La respuesta de Hacienda es definitiva: no se puede cambiar'); END;
+  `,
+
+  /* ===== Versión 3: envío de la factura al receptor por correo ===== */
+  `
+  -- Estado del correo al receptor (NULL = no corresponde o todavía no se encola).
+  -- Son columnas aparte: las columnas fiscales del comprobante siguen inmutables.
+  ALTER TABLE comprobantes ADD COLUMN correo_estado TEXT CHECK(correo_estado IN ('pendiente','enviado','error'));
+  ALTER TABLE comprobantes ADD COLUMN correo_destino    TEXT;    -- dirección a la que se envía
+  ALTER TABLE comprobantes ADD COLUMN correo_intentos   INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE comprobantes ADD COLUMN correo_error      TEXT;    -- último error (legible)
+  ALTER TABLE comprobantes ADD COLUMN correo_siguiente  TEXT;    -- próximo intento (reintentos)
+  ALTER TABLE comprobantes ADD COLUMN correo_enviado_en TEXT;    -- último envío correcto
+  CREATE INDEX comprobantes_correo ON comprobantes(correo_estado) WHERE correo_estado IS NOT NULL;
   `
 ];
 

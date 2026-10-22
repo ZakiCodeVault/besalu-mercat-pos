@@ -11,6 +11,8 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 - Firma cada comprobante (XML 4.4 + firma XAdES-EPES con la llave
   criptográfica) y lo envía a la API de Hacienda en segundo plano. Si no hay
   internet la caja sigue vendiendo y los envía solos al volver la conexión.
+- **Envía cada factura aceptada al correo del cliente** (PDF + XML firmado +
+  respuesta de Hacienda), con reintentos si no hay internet.
 - Calcula en todo momento el **IVA a pagar a Hacienda** (lo cobrado en ventas
   menos lo pagado en compras) y el **balance de entradas y salidas**.
 - Los datos fiscales **no se pueden modificar ni borrar**: la base de datos lo
@@ -30,12 +32,13 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 7. [Instalar en una caja (Windows)](#instalar-en-una-caja-windows)
 8. [Primer uso](#primer-uso)
 9. [Hacienda: conexión propia](#hacienda-conexión-propia)
-10. [Trabajar en el código](#trabajar-en-el-código)
-11. [Pruebas](#pruebas)
-12. [Publicar una versión nueva](#publicar-una-versión-nueva)
-13. [Rendimiento](#rendimiento)
-14. [Atajos de teclado](#atajos-de-teclado)
-15. [Pendientes](#pendientes)
+10. [Factura al correo del cliente](#factura-al-correo-del-cliente)
+11. [Trabajar en el código](#trabajar-en-el-código)
+12. [Pruebas](#pruebas)
+13. [Publicar una versión nueva](#publicar-una-versión-nueva)
+14. [Rendimiento](#rendimiento)
+15. [Atajos de teclado](#atajos-de-teclado)
+16. [Pendientes](#pendientes)
 
 ---
 
@@ -44,12 +47,12 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 | Pantalla | Para qué sirve |
 |---|---|
 | **Caja** (F1) | Escanear o buscar productos y cobrar en efectivo (con cambio), tarjeta o SINPE. Sin cliente emite un **tiquete**; con cliente (identificación + nombre) emite una **factura**. Cada comprobante sale con su **consecutivo** y **clave** de 50 dígitos. |
-| **Ventas** (F2) | Todos los comprobantes emitidos, con su **estado en Hacienda** (pendiente, en validación, aceptado, rechazado). Ver, reimprimir, descargar el **XML firmado** y la **respuesta de Hacienda**, emitir **nota de crédito** (anula la venta y devuelve el inventario) y **reemitir** un comprobante rechazado. Exportar a Excel. |
+| **Ventas** (F2) | Todos los comprobantes emitidos, con su **estado en Hacienda** (pendiente, en validación, aceptado, rechazado). Ver, reimprimir, descargar el **XML firmado** y la **respuesta de Hacienda**, ver si la factura se **envió al correo del cliente** y **reenviarla**, emitir **nota de crédito** (anula la venta y devuelve el inventario) y **reemitir** un comprobante rechazado. Exportar a Excel. |
 | **Compras** (F3) | Registrar las **facturas de proveedores**: a mano o **importando el XML** de la factura electrónica. Suma el inventario, actualiza el costo promedio y guarda el IVA pagado. Anular una compra mal registrada. |
 | **Inventario** (F4) | Productos con CABYS, tarifa de IVA, costo, precio y existencia. **Kárdex** por producto (cada entrada y salida con su documento). Ajustes de inventario con motivo (conteo físico, merma, vencido…). Alertas de stock bajo y vencimientos. |
 | **Reportes** (F5) | **IVA a pagar** del período (débito − crédito) y desglose por tarifa. Ventas netas, costo de lo vendido, utilidad, compras. **Entradas y salidas** de inventario. Ventas por día, medios de pago, más vendidos. Exportar ventas, compras e IVA a Excel. |
 | **Cierre** (F6) | Turno de caja: fondo inicial, ventas por medio de pago, arqueo de efectivo (esperado vs. contado) y cierre con **reporte Z**. Al cerrar se hace un respaldo automático. |
-| **Ajustes** (F7) | **Conexión con Hacienda** (ambiente, usuario y contraseña de la API, llave .p12 y PIN), datos del negocio emisor (cédula, actividad económica, ubicación, sucursal, terminal), impresión, respaldos y restauración, verificación de integridad, bitácora y actualizaciones. |
+| **Ajustes** (F7) | **Conexión con Hacienda** (ambiente, usuario y contraseña de la API, llave .p12 y PIN), **correo SMTP** para enviar las facturas, datos del negocio emisor (cédula, actividad económica, ubicación, sucursal, terminal), impresión, respaldos y restauración, verificación de integridad, bitácora y actualizaciones. |
 
 ---
 
@@ -129,7 +132,9 @@ besalu-mercat-pos/
 │       ├── firma.js            ← Llave .p12 y firma XAdES-EPES.
 │       ├── api.js              ← Token del IdP, envío y consulta de estado.
 │       ├── credenciales.js     ← Secretos cifrados con el sistema operativo.
-│       └── conector.js         ← Cola: firma, envía en orden, consulta, reintenta.
+│       ├── conector.js         ← Cola: firma, envía en orden, consulta, reintenta.
+│       ├── correo.js           ← Factura aceptada → correo del cliente (SMTP, cola, reintentos).
+│       └── pdf.js              ← Representación gráfica en hoja carta (PDF).
 │
 ├── interfaz/                   ← Lo que ve el cajero
 │   ├── index.html · estilos.css
@@ -139,7 +144,8 @@ besalu-mercat-pos/
 │       ├── app.js              ← Arranque, navegación y atajos.
 │       ├── caja.js · ventas.js · compras.js · inventario.js
 │       ├── reportes.js · cierre.js · ajustes.js
-│       ├── hacienda.js         ← Configuración, indicador y estado por comprobante.
+│       ├── hacienda.js         ← Configuración (Hacienda y correo), indicador y estado
+│       │                         por comprobante (incluido el correo al cliente).
 │       ├── ticket.js           ← Comprobante y reporte Z para imprimir.
 │       ├── graficos.js         ← Gráfico de ventas por día.
 │       └── actualizaciones.js  ← Aviso "Versión X lista → Reiniciar y actualizar".
@@ -148,8 +154,10 @@ besalu-mercat-pos/
 ├── pruebas/
 │   ├── datos.prueba.js         ← Reglas fiscales, protecciones, respaldos, velocidad.
 │   ├── hacienda.prueba.js      ← XML, firma, envío, rechazos, sin internet, producción.
+│   ├── correo.prueba.js        ← Factura al correo: adjuntos, PDF, reintentos, TLS.
 │   ├── prueba-completa.js      ← La app real de punta a punta.
 │   ├── hacienda-simulada.js    ← Servidor que imita a Hacienda (verifica firma y XSD).
+│   ├── smtp-simulado.js        ← Servidor de correo local (plano, SSL/TLS y STARTTLS).
 │   ├── llave-prueba.js         ← Genera una llave .p12 falsa para probar.
 │   └── esquemas/               ← XSD oficiales v4.4 de Hacienda.
 ├── .github/workflows/release.yml ← Compila el .exe en GitHub y publica el Release.
@@ -183,14 +191,14 @@ IVA, el consecutivo y la clave los calcula el sistema con los datos de la base.
 | Tabla | Contenido |
 |---|---|
 | `productos` | Código, nombre, CABYS, unidad, tarifa IVA, precio (con IVA), costo promedio (sin IVA), existencia, mínimo, vencimiento. |
-| `comprobantes` / `comprobante_lineas` | Tiquetes, facturas y notas de crédito con consecutivo, clave, receptor, totales e IVA por línea. Estado en Hacienda, XML firmado y respuesta de Hacienda, y el reemplazo de un rechazado. |
+| `comprobantes` / `comprobante_lineas` | Tiquetes, facturas y notas de crédito con consecutivo, clave, receptor, totales e IVA por línea. Estado en Hacienda, XML firmado y respuesta de Hacienda, el reemplazo de un rechazado y el estado del correo al cliente (columnas `correo_*`, aparte de las fiscales). |
 | `compras` / `compra_lineas` | Facturas de proveedores con número, clave, fecha, subtotal, IVA, total y el XML original. |
 | `movimientos` | Kárdex: cada entrada y salida de inventario con su documento. |
 | `secuencias` | Último número usado por tipo de comprobante. |
 | `turnos` | Turnos de caja con fondo, esperado, contado y diferencia. |
 | `clientes` · `proveedores` | Se guardan solos al facturar o registrar compras. |
 | `bitacora` | Registro de cada acción importante (no se puede borrar). |
-| `config` | Ajustes del negocio y conexión con Hacienda (secretos cifrados). |
+| `config` | Ajustes del negocio, conexión con Hacienda y correo SMTP (secretos cifrados). |
 
 ---
 
@@ -259,6 +267,8 @@ Cobrar ─▶ comprobante guardado (consecutivo + clave) ─▶ ticket impreso
         XML 4.4 ─▶ firma XAdES-EPES (llave .p12) ─▶ POST /recepcion
                                                       │
           aceptado ◀── consulta GET /recepcion/{clave} ┘
+             │  factura con correo del cliente
+             └─▶ correo: PDF + XML firmado + respuesta de Hacienda
           rechazado ─▶ se ve el motivo ─▶ "Reemitir comprobante"
 ```
 
@@ -276,7 +286,9 @@ Cobrar ─▶ comprobante guardado (consecutivo + clave) ─▶ ticket impreso
   **Reintentar envío** regenera el XML con los datos corregidos.
 - Se guardan el **XML firmado** y la **respuesta firmada de Hacienda** de cada
   comprobante (Ventas → comprobante → *XML firmado* / *Respuesta de Hacienda*,
-  con los nombres `clave.xml` y `clave_respuesta.xml` que pide Hacienda).
+  con los nombres `clave.xml` y `clave_respuesta.xml` que pide Hacienda) y,
+  en las facturas, se le envían al cliente por correo (ver
+  [Factura al correo del cliente](#factura-al-correo-del-cliente)).
 - El indicador de la barra superior dice si Hacienda está **al día**,
   **enviando**, **sin conexión** o si hay **comprobantes por revisar**.
 
@@ -331,6 +343,82 @@ En la Oficina Virtual (OVi) de **TRIBU-CR**, con la cuenta del negocio:
 
 ---
 
+## Factura al correo del cliente
+
+Hacienda exige que el emisor le haga llegar al receptor la factura electrónica.
+El POS lo hace solo: cuando Hacienda **acepta una factura** (`01`) y el cliente
+dio su correo, se le envía desde el correo del negocio con tres adjuntos:
+
+| Archivo | Qué es |
+|---|---|
+| `clave.pdf` | Representación gráfica en **hoja carta**: emisor, cliente, líneas con CABYS, desglose de IVA, clave numérica y estado en Hacienda. |
+| `clave.xml` | El comprobante firmado, byte por byte el mismo que recibió Hacienda. |
+| `clave_respuesta.xml` | La respuesta firmada de Hacienda (aceptación). |
+
+```
+Hacienda acepta la factura ─▶ correo en cola ─▶ SMTP del negocio ─▶ cliente
+                                   │                                 (+ copia oculta al negocio)
+     sin internet / servidor ocupado ─▶ se reintenta solo (30 s, 1, 2, 5, 10, 15, 30 min…)
+     dirección inexistente (550) ─▶ "No enviado" ─▶ Reenviar por correo (a la dirección correcta)
+```
+
+- Solo facturas aceptadas. Tiquetes, notas de crédito, facturas rechazadas y
+  facturas sin correo del cliente no se envían (en Ventas dice *El cliente no
+  dio correo*).
+- Si el correo todavía no está configurado, las facturas aceptadas quedan **en
+  cola** y salen solas al configurarlo y activarlo. Las aceptadas antes de esta
+  versión (2.1.0) no se envían solas: se mandan con **Enviar por correo**.
+- La cola del correo es aparte de la de Hacienda: un servidor de correo lento o
+  caído no atrasa el envío a Hacienda ni la caja.
+- Usuario o contraseña incorrectos, certificado que no corresponde o remitente
+  no permitido: se avisa en Ajustes, se reintenta cada 30 minutos y sale apenas
+  se guarda la configuración corregida.
+- **Ventas → comprobante** muestra el estado del correo (*Enviado*, *En cola*,
+  *No enviado*) con la dirección, la fecha o el motivo, y el botón **Reenviar
+  por correo**: pide la dirección (por defecto la del cliente) y la envía en el
+  momento. El correo del cliente guardado en el comprobante es un dato fiscal y
+  no cambia; la dirección usada queda aparte (`correo_destino`).
+- Cada envío, error y reenvío queda en la bitácora.
+
+### Configurar (Ajustes → Envío de facturas por correo)
+
+Con los datos SMTP que da el proveedor del dominio o del hosting (cPanel, Zoho,
+GoDaddy…):
+
+| Campo | Normalmente |
+|---|---|
+| Servidor SMTP | `mail.sudominio.com`, o el que indique el proveedor (p. ej. `smtp.zoho.com`, `smtpout.secureserver.net`) |
+| Puerto y seguridad | **465 con SSL/TLS** o **587 con STARTTLS** |
+| Usuario | el correo completo, p. ej. `facturas@sudominio.com` |
+| Contraseña | la del buzón |
+| Correo remitente | vacío = el mismo usuario (muchos servidores no dejan enviar como otra dirección) |
+| Nombre del remitente | vacío = el nombre comercial |
+| Copia oculta al correo del negocio | activado: queda en el buzón del negocio una copia de cada factura enviada |
+
+Después: **Guardar correo** y **Enviar correo de prueba** (llega al correo de
+*Datos del negocio*, que también va como *Responder a* en cada factura).
+
+- La contraseña se guarda **cifrada con la cuenta de Windows**, igual que las de
+  Hacienda, y nunca se escribe en la bitácora.
+- Con STARTTLS la conexión se cifra **antes** de mandar la contraseña; si el
+  servidor no lo permite, no se manda. "Ninguna" solo para servidores de la red
+  local (no recomendado).
+- Si el certificado del servidor no corresponde al nombre escrito (pasa en
+  hostings compartidos), use el nombre de servidor que muestra el panel del
+  proveedor.
+- **Empezar facturación real** conserva esta configuración.
+- Para que las facturas no caigan en spam, el dominio debe tener **SPF y DKIM**
+  (los configura el proveedor del dominio).
+
+| | |
+|---|---|
+| Envío | `nodemailer` (sin otras dependencias), una conexión por correo. |
+| PDF | HTML propio convertido con `printToPDF` de Chromium en una ventana oculta y sin JavaScript; fuentes incrustadas, se ve igual sin internet. |
+| Base | Migración 3: columnas `correo_estado`, `correo_destino`, `correo_intentos`, `correo_error`, `correo_siguiente` y `correo_enviado_en` en `comprobantes`. Los triggers fiscales no cambian. |
+| Pruebas | `npm run prueba:correo`, contra servidores SMTP simulados (texto plano, SSL/TLS y STARTTLS) y el Hacienda simulado. |
+
+---
+
 ## Trabajar en el código
 
 Requisitos: **Node.js 20 o 22** (la base usa `better-sqlite3`, un módulo nativo
@@ -359,15 +447,17 @@ donde se esté trabajando, y no se buscan actualizaciones.
 ## Pruebas
 
 ```bash
-npm run prueba            # las tres juntas
+npm run prueba            # las cuatro juntas
 npm run prueba:datos      # 39 pruebas de reglas fiscales y protecciones
 npm run prueba:hacienda   # 35 pruebas de la conexión con Hacienda
-npm run prueba:app        # 32 pruebas con la app real, de punta a punta
+npm run prueba:correo     # 25 pruebas del envío de facturas por correo
+npm run prueba:app        # 37 pruebas con la app real, de punta a punta
 ```
 
 Todas usan una carpeta temporal y **no tocan** los datos del negocio. Las de
 Hacienda usan una llave `.p12` falsa y un Hacienda simulado en la propia
-computadora: no se conectan a Hacienda. Para validar contra los XSD se necesita
+computadora, y las de correo un servidor SMTP simulado: no se conectan a
+Hacienda ni envían correos de verdad. Para validar contra los XSD se necesita
 `xmllint` (viene en macOS y Linux; si no está, esa parte se omite y se avisa).
 
 **`prueba:datos`** comprueba, entre otras cosas: que no se puede emitir sin
@@ -387,13 +477,28 @@ datos del emisor); el envío en orden y la aceptación; el rechazo con su motivo
 y la reemisión; el modo sin internet; contraseña incorrecta; error de esquema y
 reintento; y el paso a producción.
 
+**`prueba:correo`** comprueba: que la migración agrega las columnas del correo
+sin tocar las fiscales; que una factura aceptada sin correo configurado espera y
+sale al configurarlo; las validaciones de servidor, puerto y seguridad; que la
+contraseña queda cifrada y fuera de la bitácora; que cada factura aceptada llega
+sola al cliente con copia oculta al negocio y los tres adjuntos **idénticos** a
+lo guardado (la firma del XML adjunto sigue válida); que tiquetes, notas de
+crédito, rechazadas y facturas sin correo no se envían; el PDF en hoja carta (y
+en varias páginas si la factura es larga); sin internet, servidor ocupado (451),
+contraseña incorrecta y dirección inexistente (550), con sus reintentos;
+**Reenviar por correo** (a otra dirección y otra vez); SSL/TLS y STARTTLS reales
+con certificado, que sin cifrado no se manda la contraseña y el aviso de
+certificado que no corresponde; y que "Empezar facturación real" conserva la
+configuración.
+
 **`prueba:app`** hace lo mismo que el personal: configura el negocio, conecta
-Hacienda desde Ajustes, crea un
+Hacienda y el correo desde Ajustes (con correo de prueba), crea un
 producto, importa una factura de proveedor en XML (y comprueba que no se puede
 registrar dos veces), abre caja, vende en efectivo con cambio, verifica que al
 imprimir solo sale el comprobante, factura a un cliente por SINPE, emite una
 nota de crédito, revisa el IVA y el balance en Reportes, cierra caja con Z,
-comprueba que Hacienda aceptó todo, respalda, **reinicia la app** y comprueba
+comprueba que Hacienda aceptó todo y que la factura llegó sola al correo del
+cliente (y que **Reenviar por correo** funciona), respalda, **reinicia la app** y comprueba
 que todo quedó guardado e íntegro.
 
 ---
@@ -443,8 +548,9 @@ Medido con las pruebas:
 
 - **Primera prueba con el sandbox real de Hacienda** usando las credenciales
   de pruebas del negocio.
-- **Enviar la factura al correo del cliente** (XML + PDF): Hacienda pide que el
-  emisor se la haga llegar al receptor. Hoy se descargan desde Ventas.
+- **Primer envío real de correo** con el SMTP del dominio del negocio (Ajustes →
+  Enviar correo de prueba) y revisar que no caiga en spam (SPF/DKIM).
+- **Notas de crédito al correo del cliente**: hoy solo se envían las facturas.
 - **Aceptar o rechazar las facturas de compra** ante Hacienda (Mensaje Receptor),
   para respaldar el crédito fiscal.
 - **Firma de código** (quita el aviso "Editor desconocido"): ver GUIA-VERSIONES.md.

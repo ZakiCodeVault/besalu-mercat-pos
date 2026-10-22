@@ -321,12 +321,13 @@ td.acciones{white-space:nowrap;}
 @media (max-width:900px){ .g3,.iva-card{grid-template-columns:1fr;} }
 
 /* ---- Hacienda ---- */
-.hacienda-card{grid-column:1 / -1;}
+.hacienda-card,.correo-card{grid-column:1 / -1;}
 .hconteos{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:4px 0 10px;}
 .hcont{border:1px solid var(--line);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;background:rgba(255,255,255,.6);}
 .hcont b{font-size:20px;font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
 .hcont span{font-size:12px;color:var(--ink-3);}
 .hcont.ok b{color:var(--pos);} .hcont.mal b{color:var(--neg);} .hcont.amb b{color:#b26b0b;}
 .hseccion{width:100%;margin-top:14px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.7);display:flex;flex-direction:column;gap:4px;}
+.hcorreo{margin-top:6px;padding-top:8px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:2px;}
 .hmensaje{max-height:110px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:var(--bg-soft, #f4f6fa);border-radius:8px;padding:6px 8px;}
 @media (max-width:1100px){.hconteos{grid-template-columns:repeat(3,minmax(0,1fr));}}

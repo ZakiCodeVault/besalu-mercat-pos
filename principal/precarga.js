@@ -63,6 +63,9 @@ contextBridge.exposeInMainWorld('BESALU', {
       return () => ipcRenderer.removeListener('hacienda', h);
     }
   },
+  correo: {
+    estado: c('correo:estado'), guardar: c('correo:guardar'), probar: c('correo:probar'), reenviar: c('correo:reenviar')
+  },
 
   actualizaciones: {
     alCambiar: (cb) => {

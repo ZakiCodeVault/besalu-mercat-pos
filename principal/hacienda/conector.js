@@ -11,6 +11,8 @@
  *    situación "3 · sin internet" y se envía cuando vuelva la conexión.
  *  - La base solo deja cambiar el estado del envío; el XML no cambia una vez
  *    que Hacienda lo recibió y la respuesta final (aceptado/rechazado) es definitiva.
+ *  - Cada FACTURA aceptada con correo del receptor pasa a la cola de correo
+ *    (correo.js): XML firmado + respuesta de Hacienda + PDF al cliente.
  */
 const { obtener, leerAjustes, registrar } = require('../datos/conexion');
 const ventas = require('../datos/ventas');
@@ -19,6 +21,7 @@ const { construir } = require('./xml');
 const { cargarLlave, firmar } = require('./firma');
 const { ClienteHacienda, ErrorHacienda, leerRespuesta } = require('./api');
 const credenciales = require('./credenciales');
+const correo = require('./correo');
 const { AMBIENTES, CODIGO_TARIFA, LARGO_IDENTIFICACION, PROVINCIAS } = require('./catalogos');
 
 const red = { enLinea: null, ultimoContacto: null, ultimoError: null };
@@ -31,10 +34,11 @@ let llaveElegida = null;        // .p12 recién elegido en Ajustes, antes de gua
 const ahora = () => fechaLocal();
 const enSegundos = (s) => fechaLocal(new Date(Date.now() + s * 1000));
 
-function configurar({ cifrador, urls, alCambiar } = {}) {
+function configurar({ cifrador, urls, smtp, alCambiar } = {}) {
   credenciales.configurar(cifrador);
   urlsPrueba = urls || null;
   avisar = alCambiar || (() => {});
+  correo.configurar({ cifrador, opciones: smtp, alCambiar: () => { try { avisar(estado()); } catch (e) { /* base cerrada al salir */ } } });
   ventas.configurarHacienda({ situacion, validar });
 }
 
@@ -193,6 +197,7 @@ async function consultarEnviados(s) {
       d.prepare(`UPDATE comprobantes SET estado_hacienda = ?, hacienda_respuesta = ?, hacienda_mensaje = ?, hacienda_error = NULL,
         hacienda_fecha = ?, hacienda_siguiente = NULL WHERE id = ?`).run(r.estado, r.xmlRespuesta, mensaje.slice(0, 4000), ahora(), c.id);
       if (r.estado === 'rechazado') registrar('hacienda_rechazo', { id: c.id, consecutivo: c.consecutivo, detalle: m ? m.detalle.slice(0, 500) : '' });
+      else correo.encolar(c.id);   // factura con correo del cliente: se le envía
       cambios++;
     } else if (r.estado === 'error') {
       d.prepare(`UPDATE comprobantes SET estado_hacienda = 'error', hacienda_mensaje = ?, hacienda_siguiente = NULL WHERE id = ?`)
@@ -213,7 +218,7 @@ async function consultarEnviados(s) {
 /** Envía los pendientes y consulta los enviados. Nunca corre dos veces a la vez. */
 function procesar() {
   if (procesando) return procesando;
-  if (!activo()) return Promise.resolve({ cambios: 0 });
+  if (!activo()) { correo.procesar(); return Promise.resolve({ cambios: 0 }); }
   procesando = (async () => {
     let cambios = 0;
     try {
@@ -224,6 +229,7 @@ function procesar() {
       red.ultimoError = e.message;
     } finally {
       procesando = null;
+      correo.procesar();   // facturas recién aceptadas y reintentos (con su propio turno: no frena a Hacienda)
       programarSiguiente();
       avisar(estado());
     }
@@ -258,6 +264,7 @@ function iniciar(intervaloMs = 30000) {
 function detener() {
   clearInterval(temporizador); clearTimeout(pronto); clearTimeout(siguiente);
   temporizador = null;
+  correo.detener();
 }
 
 /** Después de restaurar un respaldo o empezar una base nueva: olvida la sesión anterior. */
@@ -265,6 +272,7 @@ function reiniciar() {
   if (sesion) sesion.cliente.cerrarSesion();
   sesion = null; llaveElegida = null;
   red.enLinea = null; red.ultimoError = null;
+  correo.reiniciar();
   procesarPronto();
 }
 
@@ -305,7 +313,8 @@ function estado() {
     certificado: c.certificado ? Object.assign({}, c.certificado, { dias }) : null,
     llaveElegida: llaveElegida ? llaveElegida.nombre : null,
     enLinea: red.enLinea, ultimoContacto: red.ultimoContacto, ultimoError: red.ultimoError,
-    conteo, rechazadosSinReemplazo, enviadosPruebas, problemas
+    conteo, rechazadosSinReemplazo, enviadosPruebas, problemas,
+    correo: correo.estado()
   };
 }
 

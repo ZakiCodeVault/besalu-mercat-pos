@@ -1,6 +1,7 @@
 /**
  * hacienda.js — Conexión propia con Hacienda: configuración (Ajustes),
  * indicador en la barra superior y estado de cada comprobante (Ventas).
+ * También el envío de las facturas aceptadas al correo del cliente.
  *
  * El envío ocurre solo, en segundo plano, en el proceso principal. Aquí solo
  * se muestra el estado y se piden las acciones (guardar, probar, reintentar…).
@@ -34,7 +35,8 @@ function iniciarAvisoHacienda() {
     App.hacienda = h;
     pintarIndicadorHacienda();
     // Refresca la lista de ventas si cambió algún estado mientras se mira
-    const cambio = !antes || JSON.stringify(antes.conteo) !== JSON.stringify(h.conteo);
+    const conteos = (x) => JSON.stringify([x.conteo, x.correo && x.correo.conteo]);
+    const cambio = !antes || conteos(antes) !== conteos(h);
     if (cambio && App.vista === 'ventas' && !hayModal()) renderVentas();
   });
 }
@@ -127,6 +129,73 @@ function tarjetaHacienda(h, alGuardar) {
   ]);
 }
 
+/* ---------------- Tarjeta del correo (Ajustes) ---------------- */
+function tarjetaCorreo(e, alGuardar) {
+  const estadoPill = e.activo ? el('span', { class: 'pill pill--green', text: 'Activo' })
+    : el('span', { class: 'pill', text: e.configurado ? 'Desactivado' : 'Sin configurar' });
+  const conexion = e.enLinea === null ? '' : e.enLinea ? 'En línea' : 'Sin conexión';
+  const sinAutocompletar = { autocomplete: 'off', spellcheck: false };
+  const servidor = el('input', Object.assign({ value: e.servidor, placeholder: 'mail.sudominio.com' }, sinAutocompletar));
+  const puerto = el('input', { value: String(e.puerto || 465), inputmode: 'numeric' });
+  const seguridad = selector([['ssl', 'SSL/TLS'], ['starttls', 'STARTTLS'], ['ninguna', 'Ninguna (no recomendado)']], e.seguridad);
+  seguridad.addEventListener('change', () => {   // puertos habituales de cada seguridad
+    if (seguridad.value === 'ssl' && puerto.value.trim() === '587') puerto.value = '465';
+    if (seguridad.value === 'starttls' && puerto.value.trim() === '465') puerto.value = '587';
+  });
+  const usuario = el('input', Object.assign({ value: e.usuario, placeholder: 'facturas@sudominio.com' }, sinAutocompletar));
+  const contrasena = el('input', { type: 'password', autocomplete: 'new-password', placeholder: e.tieneContrasena ? '•••••••• (guardada; escriba para cambiarla)' : 'La del buzón de correo' });
+  const remitente = el('input', Object.assign({ value: e.remitente, placeholder: 'Vacío = el mismo usuario' }, sinAutocompletar));
+  const nombre = el('input', { value: e.nombreRemitente, placeholder: App.ajustes.nombreComercial || App.ajustes.negocio });
+  const interruptor = (valor) => { const i = el('input', { type: 'checkbox' }); i.checked = !!valor; return i; };
+  const copia = interruptor(e.copiaNegocio), activo = interruptor(e.activo);
+  const fila = (texto, i) => el('div', { class: 'cfg-row' }, [el('div', { class: 'l', text: texto }), el('label', { class: 'sw' }, [i, el('span', { class: 'tr' })])]);
+
+  const guardar = async () => {
+    const r = await intentar(() => BESALU.correo.guardar({ activo: activo.checked, servidor: servidor.value, puerto: leerNumero(puerto.value),
+      seguridad: seguridad.value, usuario: usuario.value, contrasena: contrasena.value, remitente: remitente.value,
+      nombreRemitente: nombre.value, copiaNegocio: copia.checked }), 'No se guardó el correo');
+    if (!r) return;
+    if (App.hacienda) App.hacienda.correo = r;
+    toast('Correo guardado', 'ok', r.activo ? 'Las facturas aceptadas se envían solas al cliente' : 'El envío automático está desactivado');
+    alGuardar();
+  };
+  const probar = async (ev) => {
+    const b = ev.currentTarget; b.disabled = true;
+    const r = await intentar(() => BESALU.correo.probar(), 'El correo de prueba no salió');
+    b.disabled = false;
+    if (r) toast('Correo de prueba enviado', 'ok', r.destino);
+  };
+
+  const contador = (n, t, clase) => el('div', { class: 'hcont ' + (n && clase ? clase : '') }, [el('b', { text: String(n) }), el('span', { text: t })]);
+  return el('div', { class: 'card glass correo-card' }, [
+    el('div', { class: 'card-t' }, [el('h2', { text: 'Envío de facturas por correo' }), el('div', { style: 'display:flex;gap:8px;align-items:center' }, [
+      el('span', { class: 'mini', text: conexion }), estadoPill])]),
+    el('div', { class: 'hconteos', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, [
+      contador(e.conteo.enviado, 'enviadas', 'ok'), contador(e.conteo.pendiente, 'en cola', 'amb'), contador(e.conteo.error, 'no enviadas', 'mal')]),
+    e.problemas.length ? el('div', { class: 'note', style: 'background:var(--amber-soft, #fdf3e1)' }, el('ul', { style: 'margin:0;padding-left:18px' }, e.problemas.map((p) => el('li', { text: p })))) : null,
+    e.ultimoError ? el('div', { class: 'note', style: 'background:var(--neg-soft)', text: 'Último error: ' + e.ultimoError }) : null,
+    el('div', { class: 'g2', style: 'margin-top:12px;align-items:start' }, [
+      el('div', {}, [
+        campo('Servidor SMTP', servidor),
+        el('div', { class: 'g2' }, [campo('Puerto', puerto), campo('Seguridad', seguridad)]),
+        campo('Usuario (correo completo)', usuario),
+        campo('Contraseña', contrasena)]),
+      el('div', {}, [
+        campo('Correo remitente', remitente),
+        campo('Nombre del remitente', nombre),
+        fila('Copia oculta al correo del negocio', copia),
+        fila('Enviar cada factura aceptada al cliente', activo)])]),
+    el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:12px' }, [
+      el('button', { class: 'btn btn--accent btn--sm', onclick: guardar }, [icon('check', 15), 'Guardar correo']),
+      el('button', { class: 'btn btn--ghost btn--sm', onclick: probar }, [icon('mail', 15), 'Enviar correo de prueba'])]),
+    el('div', { class: 'note', html: 'Hacienda exige hacerle llegar al cliente la <b>factura en PDF</b>, el <b>XML firmado</b> y la <b>respuesta de Hacienda</b>: ' +
+      'se envían solos cuando Hacienda acepta cada factura y, si no hay internet, se reintentan solos. ' +
+      'Use los datos SMTP de su proveedor de dominio o hosting (cPanel, Zoho, GoDaddy…): por lo general <b>puerto 465 con SSL/TLS</b> o <b>587 con STARTTLS</b>, ' +
+      'y de usuario el correo completo. La contraseña se guarda cifrada con la cuenta de Windows de esta computadora. ' +
+      'La prueba llega al correo de Datos del negocio.' })
+  ]);
+}
+
 async function empezarFacturacionReal() {
   const ok = await confirmar('Empezar facturación real',
     'Los comprobantes enviados al ambiente de PRUEBAS no tienen validez ante Hacienda.\n\n' +
@@ -142,6 +211,7 @@ async function empezarFacturacionReal() {
 
 /* ---------------- Estado de un comprobante (Ventas) ---------------- */
 const SITUACION = { 1: 'Normal', 2: 'Contingencia', 3: 'Sin internet' };
+const ESTADO_CORREO = { pendiente: ['En cola', 'pill--amber'], enviado: ['Enviado', 'pill--green'], error: ['No enviado', 'pill--red'] };
 
 function seccionHacienda(c, alCambiar) {
   const est = ESTADO_HACIENDA[c.estado_hacienda] || [c.estado_hacienda, ''];
@@ -157,6 +227,10 @@ function seccionHacienda(c, alCambiar) {
   if (c.estado_hacienda === 'rechazado' && !c.sustituido_por) {
     acciones.push(el('button', { class: 'btn btn--accent btn--sm', onclick: () => reemitirComprobante(c, alCambiar) }, [icon('refresh', 14), 'Reemitir comprobante']));
   }
+  if (c.tipo === '01' && c.estado_hacienda === 'aceptado') {
+    acciones.push(el('button', { class: 'btn btn--ghost btn--sm', onclick: (e) => reenviarCorreo(c, e.currentTarget, alCambiar) },
+      [icon('mail', 14), c.correo_estado ? 'Reenviar por correo' : 'Enviar por correo']));
+  }
   const mensaje = c.hacienda_mensaje || c.hacienda_error;
   return el('div', { class: 'hseccion' }, [
     el('div', { style: 'display:flex;justify-content:space-between;align-items:center;gap:8px' }, [
@@ -165,8 +239,47 @@ function seccionHacienda(c, alCambiar) {
     mensaje ? el('div', { class: 'mini hmensaje', text: mensaje }) : null,
     c.sustituye ? el('div', { class: 'mini', html: 'Reemplaza al comprobante rechazado <b>' + c.sustituye.consecutivo + '</b>' }) : null,
     c.sustituido_por ? el('div', { class: 'mini', html: 'Reemplazado por <b>' + c.sustituido_por.consecutivo + '</b>' }) : null,
+    c.tipo === '01' ? lineaCorreo(c) : null,
     acciones.length ? el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px' }, acciones) : null
   ]);
+}
+
+/** Estado del envío de la factura al correo del cliente. */
+function lineaCorreo(c) {
+  const est = ESTADO_CORREO[c.correo_estado];
+  const destino = c.correo_destino || c.receptor_correo;
+  const ajustes = App.hacienda && App.hacienda.correo;
+  let texto;
+  if (c.correo_estado === 'enviado') texto = 'Enviada a ' + destino + ' · ' + fechaHora(c.correo_enviado_en);
+  else if (c.correo_estado === 'pendiente') {
+    texto = 'Por enviar a ' + destino + (c.correo_error ? ' · ' + c.correo_error : '') +
+      (ajustes && !ajustes.activo ? ' · active el envío en Ajustes → Envío de facturas por correo' : c.correo_siguiente ? ' · reintento a las ' + fechaHora(c.correo_siguiente).slice(-5) : '');
+  } else if (c.correo_estado === 'error') texto = destino + ': ' + c.correo_error;
+  else if (!c.receptor_correo) texto = 'El cliente no dio correo';
+  else if (c.estado_hacienda === 'aceptado') texto = 'Sin enviar a ' + c.receptor_correo;
+  else texto = 'Se envía a ' + c.receptor_correo + ' cuando Hacienda acepte la factura';
+  return el('div', { class: 'hcorreo' }, [
+    el('div', { style: 'display:flex;justify-content:space-between;align-items:center;gap:8px' }, [
+      el('span', { style: 'display:flex;align-items:center;gap:6px;font-weight:600' }, [icon('mail', 15), 'Correo al cliente']),
+      est ? el('span', { class: 'pill ' + est[1], text: est[0] }) : null]),
+    el('div', { class: 'mini', text: texto })]);
+}
+
+async function reenviarCorreo(c, boton, alCambiar) {
+  const destino = await confirmar(c.correo_estado ? 'Reenviar por correo' : 'Enviar por correo',
+    'Se envía la factura ' + Number(c.consecutivo.slice(-10)) + ' (PDF, XML firmado y respuesta de Hacienda) a:',
+    { pedirTexto: 'Correo del cliente', valor: c.correo_destino || c.receptor_correo || '', aceptar: 'Enviar' });
+  if (!destino) return;
+  boton.disabled = true;
+  const r = await intentar(() => BESALU.correo.reenviar(c.id, destino), 'No se pudo enviar el correo');
+  boton.disabled = false;
+  if (!r) return;
+  if (r.correo_estado === 'enviado') toast('Factura enviada por correo', 'ok', r.correo_destino);
+  else {
+    const reintenta = r.correo_estado === 'pendiente' && App.hacienda && App.hacienda.correo && App.hacienda.correo.activo;
+    toast('No se pudo enviar el correo', 'err', r.correo_error + (reintenta ? ' · se reintentará solo' : ''));
+  }
+  alCambiar();
 }
 
 async function guardarXml(id, cual) {

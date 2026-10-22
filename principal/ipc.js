@@ -11,6 +11,7 @@ const log = require('electron-log');
 const datos = require('./datos');
 const exportar = require('./exportar');
 const hacienda = require('./hacienda/conector');
+const correo = require('./hacienda/correo');
 
 function amigable(e) {
   const m = String((e && e.message) || e);
@@ -173,6 +174,12 @@ function registrar(ctx) {
     hacienda.reiniciar();
     return r;
   });
+
+  /* ---- Correo: factura aceptada → cliente ---- */
+  manejar('correo:estado', () => correo.estado());
+  manejar('correo:guardar', (c) => correo.guardarConfiguracion(c || {}));
+  manejar('correo:probar', () => correo.probar());
+  manejar('correo:reenviar', (id, destino) => correo.reenviar(id, destino));
 }
 
 module.exports = { registrar };

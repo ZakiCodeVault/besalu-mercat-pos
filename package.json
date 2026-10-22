@@ -10,9 +10,10 @@
   "scripts": {
     "iniciar": "electron .",
     "start": "electron .",
-    "prueba": "npm run prueba:datos && npm run prueba:hacienda && npm run prueba:app",
+    "prueba": "npm run prueba:datos && npm run prueba:hacienda && npm run prueba:correo && npm run prueba:app",
     "prueba:datos": "electron pruebas/datos.prueba.js",
     "prueba:hacienda": "electron pruebas/hacienda.prueba.js",
+    "prueba:correo": "electron pruebas/correo.prueba.js",
     "prueba:app": "electron pruebas/prueba-completa.js",
     "reconstruir": "electron-builder install-app-deps",
     "postinstall": "electron-builder install-app-deps",
@@ -22,7 +23,8 @@
     "better-sqlite3": "^11.10.0",
     "electron-log": "^5.2.0",
     "electron-updater": "^6.3.9",
-    "node-forge": "^1.4.0"
+    "node-forge": "^1.4.0",
+    "nodemailer": "10.0.15"
   },
   "devDependencies": {
     "@xmldom/xmldom": "^0.9.12",

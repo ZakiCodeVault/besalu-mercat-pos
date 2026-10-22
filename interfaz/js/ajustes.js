@@ -1,6 +1,6 @@
 /**
  * ajustes.js — Configuración, Hacienda, respaldos e integridad (F7).
- * La tarjeta de Hacienda está en hacienda.js.
+ * Las tarjetas de Hacienda y del correo están en hacienda.js.
  */
 async function renderAjustes() {
   const root = $('#v-ajustes');
@@ -22,6 +22,7 @@ async function renderAjustes() {
   const g = el('div', { class: 'cfg-grid' });
   App.hacienda = estado.hacienda; pintarIndicadorHacienda();
   g.appendChild(tarjetaHacienda(estado.hacienda, renderAjustes));
+  g.appendChild(tarjetaCorreo(estado.hacienda.correo, renderAjustes));
   g.appendChild(el('div', { class: 'card glass' }, [el('h2', { text: 'Datos del negocio (emisor)' }),
     campo('Nombre o razón social', txt('negocio')), campo('Nombre comercial (opcional)', txt('nombreComercial')),
     el('div', { class: 'g2' }, [campo('Tipo de identificación', f.tipoCedula), campo('Número de cédula', txt('cedula', { placeholder: 'Obligatorio para emitir' }))]),

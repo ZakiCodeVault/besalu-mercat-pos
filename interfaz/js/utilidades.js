@@ -40,6 +40,7 @@ const SVG = {
   database: '<ellipse cx="12" cy="6" rx="7" ry="2.8"/><path d="M5 6v12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V6"/><path d="M5 12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8"/>',
   refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><polyline points="19.5 4.5 19.5 9 15 9"/>',
   list: '<line x1="9" y1="7" x2="20" y2="7"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="17" x2="20" y2="17"/><circle cx="5" cy="7" r="1" fill="currentColor"/><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="5" cy="17" r="1" fill="currentColor"/>',
+  mail: '<rect x="3" y="5.5" width="18" height="13" rx="2.2"/><path d="M3.6 7.2 12 13l8.4-5.8"/>',
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>'
 };
 function icon(n, s = 20) { const sp = document.createElement('span'); sp.className = 'ic'; sp.innerHTML = svg(n, s); return sp; }
@@ -148,12 +149,12 @@ const hayModal = () => !!$('#modalRoot').lastChild;
 
 /**
  * Confirmación dentro de la app (sin cuadros del sistema).
- * opciones: { peligro, aceptar, pedirTexto: 'Motivo', escribir: 'RESTAURAR' }
+ * opciones: { peligro, aceptar, pedirTexto: 'Motivo', valor: 'texto inicial', escribir: 'RESTAURAR' }
  * Devuelve el texto escrito (o true) si acepta; null si cancela.
  */
 function confirmar(titulo, mensaje, opciones = {}) {
   return new Promise((resolver) => {
-    const campo = opciones.pedirTexto || opciones.escribir ? el('input', { placeholder: opciones.escribir ? 'Escriba ' + opciones.escribir : opciones.pedirTexto }) : null;
+    const campo = opciones.pedirTexto || opciones.escribir ? el('input', { placeholder: opciones.escribir ? 'Escriba ' + opciones.escribir : opciones.pedirTexto, value: opciones.valor || '' }) : null;
     const listo = (v) => { cerrarModal(); resolver(v); };
     const aceptar = () => {
       if (opciones.escribir && campo.value.trim().toUpperCase() !== opciones.escribir) { campo.focus(); toast('Escriba ' + opciones.escribir + ' para confirmar', 'err'); return; }

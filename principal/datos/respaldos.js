@@ -110,11 +110,14 @@ async function restaurar(nombreOruta) {
  * respaldos como "archivo-<motivo>-<fecha>.sqlite" (no se borra nunca) y la
  * nueva arranca sin comprobantes ni compras, con los mismos ajustes, productos
  * (su existencia actual pasa a ser el inventario inicial), clientes y proveedores.
+ * También se conserva la configuración del correo (no depende del ambiente de
+ * Hacienda); las credenciales de Hacienda no, porque las de pruebas no sirven en producción.
  */
 async function empezarBaseNueva(motivo = 'pruebas') {
   if (!carpeta) throw new Error('Respaldos sin configurar');
   const d = conexion.obtener();
   const ajustes = conexion.leerAjustes();
+  const correo = conexion.leerConfig('correo', null);
   const productos = d.prepare('SELECT * FROM productos WHERE activo = 1 ORDER BY id').all();
   const clientes = d.prepare('SELECT tipo_id, identificacion, nombre, correo, telefono FROM clientes').all();
   const proveedores = d.prepare('SELECT tipo_id, identificacion, nombre, correo, telefono FROM proveedores').all();
@@ -134,6 +137,7 @@ async function empezarBaseNueva(motivo = 'pruebas') {
   const productosMod = require('./productos');
   nueva.transaction(() => {
     conexion.guardarAjustes(ajustes);
+    if (correo) conexion.escribirConfig('correo', correo);
     for (const p of productos) {
       productosMod.crear({ codigo: p.codigo, nombre: p.nombre, cabys: p.cabys, unidad: p.unidad, tarifa_iva: p.tarifa_iva,
         precio: p.precio, costo: p.costo, stock_minimo: p.stock_minimo, vence: p.vence, stock_inicial: Math.max(0, p.stock) }, { conBitacora: false });
