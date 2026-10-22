@@ -6,6 +6,11 @@
  * valida contra los XSD oficiales v4.4 (xmllint, si está instalado).
  * Responde "procesando" en la primera consulta y luego "aceptado" (o
  * "rechazado" para las claves marcadas).
+ *
+ * Mensajes de receptor (llevan consecutivoReceptor): se consultan con
+ * "clave-consecutivo". Si la factura del proveedor está en `sim.facturas`,
+ * se comparan las cédulas y los montos como lo hace Hacienda y, si no
+ * coinciden, el mensaje se rechaza.
  */
 const http = require('http');
 const fs = require('fs');
@@ -16,7 +21,10 @@ const { SignedXml } = require('xml-crypto');
 const { DOMParser } = require('@xmldom/xmldom');
 
 const ESQUEMAS = path.join(__dirname, 'esquemas', '2024', 'v4.4');
-const XSD = { '01': 'FacturaElectronica_V4.4.xsd', '03': 'NotaCreditoElectronica_V4.4.xsd', '04': 'TiqueteElectronico_V4.4.xsd' };
+const XSD = { '01': 'FacturaElectronica_V4.4.xsd', '03': 'NotaCreditoElectronica_V4.4.xsd', '04': 'TiqueteElectronico_V4.4.xsd',
+  MR: 'MensajeReceptor_V4.4.xsd' };
+const CODIGO_MENSAJE = { '05': '1', '06': '2', '07': '3' };
+const valorXml = (xml, etiqueta) => { const m = xml.match(new RegExp('<' + etiqueta + '>([^<]*)</' + etiqueta + '>')); return m ? m[1] : null; };
 const NS_DS = 'http://www.w3.org/2000/09/xmldsig#';
 
 let hayXmllint = true;
@@ -51,10 +59,23 @@ function mensajeHacienda(clave, aceptado, detalle) {
 
 /**
  * @param {object} o { usuario, contrasena, certPem, cedula, puerto (0 = cualquiera) }
- * @returns {Promise<object>} simulador con { urls, recibidos, errores, caido, rechazar, validacion400, cerrar() }
+ * @returns {Promise<object>} simulador con { urls, recibidos, errores, caido, rechazar, validacion400, facturas, cerrar() }
+ *   facturas: Map clave → { emisor, receptor, total, impuesto } (facturas de proveedores que "tiene" Hacienda)
  */
 async function crearSimulador({ usuario, contrasena, certPem, cedula = '3101123456', puerto = 0 }) {
-  const sim = { caido: false, recibidos: [], tokens: 0, refrescos: 0, consultas: {}, rechazar: new Set(), validacion400: new Set(), errores: [] };
+  const sim = { caido: false, recibidos: [], tokens: 0, refrescos: 0, consultas: {}, rechazar: new Set(), validacion400: new Set(), errores: [], facturas: new Map() };
+
+  /** Lo que Hacienda revisa de un mensaje de receptor contra la factura (Anexo v4.4). */
+  function revisarMensaje(r) {
+    const f = sim.facturas.get(r.claveFactura);
+    if (!f) return null;
+    const x = r.xml;
+    if (valorXml(x, 'NumeroCedulaEmisor') !== f.emisor) return 'La cédula del emisor no coincide con la del comprobante';
+    if (valorXml(x, 'NumeroCedulaReceptor') !== f.receptor) return 'La cédula del receptor no coincide con la del comprobante';
+    if (Number(valorXml(x, 'TotalFactura')) !== Number(f.total)) return 'El total de la factura no coincide con el del comprobante';
+    if (Number(valorXml(x, 'MontoTotalImpuesto') || 0) !== Number(f.impuesto || 0)) return 'El monto total del impuesto no coincide con el del comprobante';
+    return null;
+  }
   const ok = (c, m) => { if (!c) throw new Error(m); };
   const servidor = http.createServer((req, res) => {
     if (sim.caido) { req.socket.destroy(); return; }
@@ -75,29 +96,45 @@ async function crearSimulador({ usuario, contrasena, certPem, cedula = '31011234
       if (req.method === 'POST' && req.url === '/recepcion') {
         const j = JSON.parse(cuerpo);
         const contenido = Buffer.from(j.comprobanteXml, 'base64').toString('utf8');
-        if (sim.recibidos.some((r) => r.clave === j.clave)) return responder(400, null, { 'X-Error-Cause': 'El comprobante con la Clave [' + j.clave + '] ya fue recibido.' });
-        if (sim.validacion400.has(j.clave)) return responder(400, null, { 'X-Error-Cause': 'El XML no cumple el esquema', 'validation-exception': 'true' });
-        const tipo = j.clave.slice(29, 31);
+        const mensajeReceptor = j.consecutivoReceptor !== undefined;
+        const id = mensajeReceptor ? j.clave + '-' + j.consecutivoReceptor : j.clave;
+        if (sim.recibidos.some((r) => r.clave === id)) return responder(400, null, { 'X-Error-Cause': 'El comprobante con la Clave [' + id + '] ya fue recibido.' });
+        if (sim.validacion400.has(id)) return responder(400, null, { 'X-Error-Cause': 'El XML no cumple el esquema', 'validation-exception': 'true' });
+        const tipo = mensajeReceptor ? String(j.consecutivoReceptor).slice(8, 10) : j.clave.slice(29, 31);
         try {
           ok(/^\d{50}$/.test(j.clave), 'clave');
-          ok(j.emisor.numeroIdentificacion === cedula && j.emisor.tipoIdentificacion === '02', 'emisor');
           ok(contenido.includes('<Clave>' + j.clave + '</Clave>'), 'clave en XML');
+          if (mensajeReceptor) {
+            // Mensaje Receptor: emisor = el proveedor, receptor = el negocio que acepta o rechaza
+            ok(/^\d{20}$/.test(j.consecutivoReceptor) && CODIGO_MENSAJE[tipo], 'consecutivoReceptor');
+            ok(j.receptor && j.receptor.numeroIdentificacion === cedula && j.receptor.tipoIdentificacion === '02', 'receptor');
+            ok(j.emisor && /^\d{9,12}$/.test(j.emisor.numeroIdentificacion) && j.emisor.numeroIdentificacion !== cedula, 'emisor');
+            ok(contenido.includes('<NumeroConsecutivoReceptor>' + j.consecutivoReceptor + '</NumeroConsecutivoReceptor>'), 'consecutivo en XML');
+            ok(contenido.includes('<Mensaje>' + CODIGO_MENSAJE[tipo] + '</Mensaje>'), 'código de mensaje según el tipo ' + tipo);
+            ok(contenido.includes('<NumeroCedulaEmisor>' + j.emisor.numeroIdentificacion + '</NumeroCedulaEmisor>'), 'cédula del emisor en XML');
+          } else {
+            ok(j.emisor.numeroIdentificacion === cedula && j.emisor.tipoIdentificacion === '02', 'emisor');
+          }
           ok(firmaValida(contenido, certPem), 'firma inválida');
-          validarXsd(tipo, contenido);
-        } catch (e) { sim.errores.push(j.clave + ': ' + e.message); return responder(400, null, { 'X-Error-Cause': e.message }); }
-        sim.recibidos.push({ clave: j.clave, tipo, xml: contenido, receptor: j.receptor || null });
-        return responder(201, null, { Location: '/recepcion/' + j.clave });
+          validarXsd(mensajeReceptor ? 'MR' : tipo, contenido);
+        } catch (e) { sim.errores.push(id + ': ' + e.message); return responder(400, null, { 'X-Error-Cause': e.message }); }
+        sim.recibidos.push({ clave: id, tipo, xml: contenido, receptor: j.receptor || null, emisor: j.emisor,
+          mensajeReceptor, claveFactura: j.clave, consecutivoReceptor: j.consecutivoReceptor || null });
+        return responder(201, null, { Location: '/recepcion/' + id });
       }
-      const m = req.url.match(/^\/recepcion\/(\d{50})$/);
+      const m = req.url.match(/^\/recepcion\/(\d{50}(?:-\d{20})?)$/);
       if (req.method === 'GET' && m) {
         const clave = m[1];
         if (!sim.recibidos.some((r) => r.clave === clave)) return responder(400, null, { 'X-Error-Cause': 'No existe el recurso con Clave = [' + clave + ']' });
         sim.consultas[clave] = (sim.consultas[clave] || 0) + 1;
         if (sim.consultas[clave] === 1) return responder(200, { clave, fecha: '', 'ind-estado': 'procesando' });
-        const aceptado = !sim.rechazar.has(clave);
-        const detalle = aceptado ? 'Este comprobante fue aceptado en el ambiente de pruebas' : 'El código de actividad 471101 no está inscrito &amp; otro error';
+        const recibido = sim.recibidos.find((r) => r.clave === clave);
+        const problema = recibido.mensajeReceptor ? revisarMensaje(recibido) : null;
+        const aceptado = !sim.rechazar.has(clave) && !problema;
+        const detalle = aceptado ? 'Este comprobante fue aceptado en el ambiente de pruebas'
+          : problema || 'El código de actividad 471101 no está inscrito &amp; otro error';
         return responder(200, { clave, fecha: '', 'ind-estado': aceptado ? 'aceptado' : 'rechazado',
-          'respuesta-xml': Buffer.from(mensajeHacienda(clave, aceptado, detalle)).toString('base64') });
+          'respuesta-xml': Buffer.from(mensajeHacienda(clave.slice(0, 50), aceptado, detalle)).toString('base64') });
       }
       responder(404);
     });

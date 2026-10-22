@@ -14,8 +14,9 @@ function pintarIndicadorHacienda() {
   if (!b) return;
   if (!h || !h.activo) { b.hidden = true; return; }
   b.hidden = false;
-  const enCola = h.conteo.pendiente + h.conteo.enviado;
-  const problemas = h.conteo.error + h.rechazadosSinReemplazo;
+  const mensajes = h.mensajes || { pendiente: 0, enviado: 0 };
+  const enCola = h.conteo.pendiente + h.conteo.enviado + mensajes.pendiente + mensajes.enviado;
+  const problemas = h.conteo.error + h.rechazadosSinReemplazo + (h.mensajesPorRevisar || 0);
   const pruebas = h.ambiente === 'pruebas' ? ' (pruebas)' : '';
   let clase = 'ok', texto = 'Hacienda al día' + pruebas;
   if (h.enLinea === false) { clase = 'mal'; texto = 'Hacienda sin conexión' + (enCola ? ' · ' + enCola + ' en cola' : ''); }
@@ -33,9 +34,11 @@ function iniciarAvisoHacienda() {
     const antes = App.hacienda;
     App.hacienda = h;
     pintarIndicadorHacienda();
-    // Refresca la lista de ventas si cambió algún estado mientras se mira
+    // Refresca la lista de ventas o de compras si cambió algún estado mientras se mira
     const cambio = !antes || JSON.stringify(antes.conteo) !== JSON.stringify(h.conteo);
     if (cambio && App.vista === 'ventas' && !hayModal()) renderVentas();
+    const cambioMensajes = !antes || JSON.stringify(antes.mensajes) !== JSON.stringify(h.mensajes);
+    if (cambioMensajes && App.vista === 'compras') { renderCompras(); refrescarCompraAbierta(); }
   });
 }
 
@@ -104,6 +107,9 @@ function tarjetaHacienda(h, alGuardar) {
     el('div', { class: 'hconteos' }, [
       contador(h.conteo.pendiente, 'pendientes', 'amb'), contador(h.conteo.enviado, 'en validación', ''),
       contador(h.conteo.aceptado, 'aceptados', 'ok'), contador(h.conteo.rechazado, 'rechazados', 'mal'), contador(h.conteo.error, 'con error', 'mal')]),
+    h.mensajes && (h.mensajes.pendiente + h.mensajes.enviado + h.mensajes.aceptado + h.mensajes.rechazado + h.mensajes.error)
+      ? el('div', { class: 'mini', style: 'margin-top:6px', text: 'Facturas de compra (Mensaje Receptor): ' + h.mensajes.aceptado + ' aceptados por Hacienda · ' +
+        (h.mensajes.pendiente + h.mensajes.enviado) + ' en cola · ' + (h.mensajes.rechazado + h.mensajes.error) + ' con problema' }) : null,
     h.problemas.length ? el('div', { class: 'note', style: 'background:var(--amber-soft, #fdf3e1)' }, el('ul', { style: 'margin:0;padding-left:18px' }, h.problemas.map((p) => el('li', { text: p })))) : null,
     h.ultimoError ? el('div', { class: 'note', style: 'background:var(--neg-soft)', text: 'Último error: ' + h.ultimoError }) : null,
     el('div', { class: 'g2', style: 'margin-top:12px;align-items:start' }, [

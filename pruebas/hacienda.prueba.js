@@ -3,7 +3,8 @@
  *
  * Usa una base temporal, una llave .p12 FALSA y un servidor que imita el IdP y
  * la API de Recepción de Hacienda. El servidor simulado verifica la firma
- * (xml-crypto) y valida cada XML contra los XSD oficiales v4.4 (xmllint).
+ * (xml-crypto) y valida cada XML contra los XSD oficiales v4.4 (xmllint):
+ * comprobantes emitidos y mensajes de receptor (aceptar/rechazar compras).
  *
  * Uso:  npm run prueba:hacienda
  */
@@ -16,12 +17,14 @@ const { execFileSync } = require('child_process');
 const datos = require('../principal/datos');
 const xml = require('../principal/hacienda/xml');
 const firma = require('../principal/hacienda/firma');
+const receptor = require('../principal/hacienda/receptor');
+const montos = require('../principal/datos/montos');
 const conector = require('../principal/hacienda/conector');
 const { leerRespuesta } = require('../principal/hacienda/api');
 const { generarLlavePrueba } = require('./llave-prueba');
 const { crearSimulador, validarXsd, firmaValida } = require('./hacienda-simulada');
 
-const { conexion, productos, ventas, caja, reportes, respaldos } = datos;
+const { conexion, productos, ventas, compras, caja, reportes, respaldos } = datos;
 let hayXmllint = true;
 try { execFileSync('xmllint', ['--version'], { stdio: 'ignore' }); } catch (e) { hayXmllint = false; }
 
@@ -55,14 +58,46 @@ const USUARIO = 'cpj-3-101-123456@stag.comprobanteselectronicos.go.cr';
 const CONTRASENA = 'W$/JX/AS@K);1]I;u|+6';   // con caracteres especiales, como las que da Hacienda
 let sim = null;   // Hacienda simulada (se crea al empezar)
 
-/** Procesa la cola hasta que no queden pendientes ni enviados (o se agoten las vueltas). */
+/** Procesa las colas hasta que no queden pendientes ni enviados (o se agoten las vueltas). */
 async function procesarTodo(vueltas = 6) {
   for (let i = 0; i < vueltas; i++) {
     sql('UPDATE comprobantes SET hacienda_siguiente = NULL');   // sin esperar los tiempos reales
+    sql('UPDATE mensajes_receptor SET hacienda_siguiente = NULL');
     await conector.procesar();
-    const n = fila("SELECT count(*) AS n FROM comprobantes WHERE estado_hacienda IN ('pendiente','enviado')").n;
+    const n = fila(`SELECT (SELECT count(*) FROM comprobantes WHERE estado_hacienda IN ('pendiente','enviado'))
+      + (SELECT count(*) FROM mensajes_receptor WHERE estado_hacienda IN ('pendiente','enviado')) AS n`).n;
     if (!n) return;
   }
+}
+
+/* ---------------- Facturas de proveedores (para el Mensaje Receptor) ---------------- */
+const PROVEEDOR = { negocio: 'Distribuidora Central S.A.', tipoCedula: '02', cedula: '3101999999', actividadEconomica: '463001',
+  correo: 'ventas@dc.cr', provincia: '4', canton: '1', distrito: '1', direccion: 'Bodega 4, zona industrial' };
+let numeroProveedor = 0;
+/**
+ * Factura electrónica v4.4 que un proveedor le emite al negocio (o a otra cédula),
+ * firmada, como la que llega por correo y se importa en Compras.
+ */
+function facturaProveedor(lineas, { cedulaReceptor = '3101123456', llave } = {}) {
+  const cons = montos.consecutivo('001', '00001', '01', ++numeroProveedor);
+  const c = { tipo: '01', consecutivo: cons, clave: montos.clave(new Date(), PROVEEDOR.cedula, cons), fecha_emision: montos.fechaIso(), medio_pago: 'transferencia',
+    receptor_tipo_id: '02', receptor_identificacion: cedulaReceptor, receptor_nombre: 'Besalú Mercat S.A.', receptor_correo: 'facturas@besalu.cr',
+    lineas: lineas.map((l, i) => Object.assign({ linea: i + 1, unidad: 'Unid' }, l)) };
+  const { xml: crudo, montos: m } = xml.construir(c, PROVEEDOR);
+  return { clave: c.clave, consecutivo: cons, xml: firma.firmar(crudo, llave), total: xml.decimal5(m.total), impuesto: xml.decimal5(m.impuesto), montos: m };
+}
+/** Registra la compra como lo hace el formulario al importar el XML. */
+function importarCompra(f, cambios = {}) {
+  return compras.registrarCompra(Object.assign({
+    proveedor: { tipo_id: '02', identificacion: PROVEEDOR.cedula, nombre: PROVEEDOR.negocio },
+    numero_documento: f.consecutivo, clave: f.clave, fecha: montos.fechaLocal().slice(0, 10), xml_original: f.xml,
+    lineas: f.montos.lineas.map((l) => ({ descripcion: l.descripcion, cantidad: l.cantidad, costo_unitario: Math.round(l.base / 1000 / l.cantidad),
+      tarifa_iva: l.tarifa_iva, subtotal: Math.round(l.base / 1000), impuesto: Math.round(l.iva / 1000) }))
+  }, cambios));
+}
+/** Facturas que "tiene" Hacienda: el simulador compara contra ellas. */
+function haciendaConoce(f, cambios = {}) {
+  sim.facturas.set(f.clave, Object.assign({ emisor: PROVEEDOR.cedula, receptor: '3101123456', total: f.total, impuesto: f.impuesto }, cambios));
 }
 
 /* ---------------- Pruebas ---------------- */
@@ -258,6 +293,165 @@ async function correr() {
   await prueba('Un rechazado se reemite una sola vez', () => falla(() => ventas.reemitir(r1.id), 'ya fue reemplazado'));
   await prueba('Solo se reemiten rechazados', () => falla(() => ventas.reemitir(v1.id), 'rechazados'));
 
+  console.log('\nMensaje Receptor (aceptar o rechazar compras)');
+  const lineaProv = (descripcion, total, tarifa, cantidad = 1) => ({ codigo: 'P-' + descripcion.length, cabys: '2211000000000', descripcion, cantidad, total_linea: total, tarifa_iva: tarifa });
+  const fA = facturaProveedor([lineaProv('Leche entera 1L', 2340000, 1, 24), lineaProv('Vino de la casa', 1130000, 13, 2), lineaProv('Queso fresco', 520000, 0)], { llave });
+  const fB = facturaProveedor([lineaProv('Computadora para la caja', 45200000, 13)], { llave });
+  const fC = facturaProveedor([lineaProv('Galletas surtidas', 678000, 13, 12)], { llave });
+  const fD = facturaProveedor([lineaProv('Bolsas plásticas', 226000, 13, 100)], { llave });
+  const fE = facturaProveedor([lineaProv('Aceite de oliva', 1695000, 13, 3)], { llave });
+  const fAjena = facturaProveedor([lineaProv('Mercadería de otro negocio', 113000, 13)], { llave, cedulaReceptor: '3101555555' });
+  for (const f of [fA, fB, fC, fD, fE]) haciendaConoce(f);
+  const cA = importarCompra(fA), cB = importarCompra(fB), cC = importarCompra(fC), cD = importarCompra(fD);
+  const cE = importarCompra(fE), cAjena = importarCompra(fAjena);
+  const manual = compras.registrarCompra({ proveedor: { identificacion: '3101777777', nombre: 'Panadería La Espiga' }, numero_documento: 'M-1',
+    clave: '5'.repeat(50), fecha: montos.fechaLocal().slice(0, 10), lineas: [{ descripcion: 'Pan', cantidad: 1, costo_unitario: 100000, tarifa_iva: 1 }] });
+  const enviado = (id) => sim.recibidos.find((r) => r.mensajeReceptor && r.consecutivoReceptor === compras.obtenerMensaje(id).consecutivo);
+  const ivaPeriodo = () => { const hoy = montos.fechaLocal().slice(0, 10); return reportes.iva(hoy, hoy); };
+
+  await prueba('Leer la factura del proveedor (clave, cédulas y montos exactos del XML)', () => {
+    const f = receptor.leerFactura(fA.xml);
+    ok(f.clave === fA.clave && f.emisor.numero === PROVEEDOR.cedula && f.receptor.numero === '3101123456', JSON.stringify(f.receptor));
+    ok(xml.decimal5(f.total) === fA.total && xml.decimal5(f.impuesto) === fA.impuesto, f.total + ' / ' + f.impuesto);
+    return 'total ' + fA.total + ' · IVA ' + fA.impuesto;
+  });
+  await prueba('Compra registrada a mano: pide importar el XML', () => falla(() => conector.responderCompra(manual.id, { tipo: '05' }), 'importando el XML'));
+  await prueba('Factura a nombre de otra cédula: no se puede aceptar (y no queda "por aceptar")', async () => {
+    await falla(() => conector.responderCompra(cAjena.id, { tipo: '05' }), '3101555555');
+    ok(/3101555555/.test(compras.obtenerPorId(cAjena.id).no_aceptable) && compras.obtenerPorId(cA.id).no_aceptable === null);
+    const lista = compras.listar({});
+    ok(!lista.find((c) => c.id === cAjena.id).por_aceptar && !lista.find((c) => c.id === manual.id).por_aceptar && lista.find((c) => c.id === cA.id).por_aceptar);
+    return compras.obtenerPorId(cAjena.id).no_aceptable;
+  });
+  await prueba('Tiquete del proveedor: no se acepta (no lleva receptor)', () =>
+    falla(() => receptor.leerFactura(firmado), 'tiquete'));
+  let mA;
+  await prueba('Aceptación total: consecutivo 05 propio, montos de la factura, XSD y firma válidos', async () => {
+    const c = conector.responderCompra(cA.id, { tipo: '05' });
+    mA = c.mensaje;
+    ok(mA && mA.tipo === '05' && mA.consecutivo === '00100001050000000001' && mA.estado_hacienda === 'pendiente', JSON.stringify(mA));
+    await procesarTodo();
+    const r = enviado(mA.id);
+    ok(r, 'Hacienda no recibió el mensaje');
+    ok(r.claveFactura === fA.clave && r.emisor.numeroIdentificacion === PROVEEDOR.cedula && r.receptor.numeroIdentificacion === '3101123456', 'emisor/receptor del envío');
+    const x = r.xml;
+    ok(x.includes('<Clave>' + fA.clave + '</Clave><NumeroCedulaEmisor>3101999999</NumeroCedulaEmisor><FechaEmisionDoc>'), 'encabezado');
+    ok(x.includes('<Mensaje>1</Mensaje><MontoTotalImpuesto>' + fA.impuesto + '</MontoTotalImpuesto><CodigoActividad>471101</CodigoActividad><CondicionImpuesto>01</CondicionImpuesto>'), 'condición 01');
+    ok(x.includes('<MontoTotalImpuestoAcreditar>' + fA.impuesto + '</MontoTotalImpuestoAcreditar>'), 'acredita todo el IVA');
+    ok(x.includes('<MontoTotalDeGastoAplicable>' + xml.decimal5(fA.montos.total - fA.montos.impuesto) + '</MontoTotalDeGastoAplicable>'), 'gasto = total − IVA');
+    ok(x.includes('<TotalFactura>' + fA.total + '</TotalFactura><NumeroCedulaReceptor>3101123456</NumeroCedulaReceptor><NumeroConsecutivoReceptor>00100001050000000001</NumeroConsecutivoReceptor>'), 'cierre');
+    ok(!x.includes('<DetalleMensaje>'), 'sin detalle en la aceptación total');
+    ok(firmaValida(x, llavePrueba.certPem), 'firma');
+    const m = compras.obtenerPorId(cA.id).mensaje;
+    ok(m.estado_hacienda === 'aceptado' && m.hacienda_mensaje === 'Aceptado por Hacienda' && m.tiene_respuesta, m.estado_hacienda);
+    ok(compras.listar({}).find((c) => c.id === cA.id).mensaje_estado === 'aceptado', 'estado en la lista de compras');
+    return validarXsd('MR', x) + ' · ' + mA.consecutivo;
+  });
+  await prueba('El XSD de MensajeReceptor sí detecta un mensaje mal armado', () => {
+    if (!hayXmllint) return 'sin xmllint';
+    const x = enviado(mA.id).xml;
+    const sinConsecutivo = x.replace(/<NumeroConsecutivoReceptor>\d+<\/NumeroConsecutivoReceptor>/, '');
+    const desordenado = x.replace(/(<CondicionImpuesto>01<\/CondicionImpuesto>)(<MontoTotalImpuestoAcreditar>[^<]+<\/MontoTotalImpuestoAcreditar>)/, '$2$1');
+    ok(sinConsecutivo !== x && desordenado !== x);
+    return falla(() => validarXsd('MR', sinConsecutivo), 'XSD').then(() => falla(() => validarXsd('MR', desordenado), 'XSD')).then(() => 'faltante y desorden rechazados');
+  });
+  await prueba('La misma factura no se acepta dos veces', () => falla(() => conector.responderCompra(cA.id, { tipo: '07', detalle: 'Cambio de opinión' }), 'ya tiene aceptación'));
+  await prueba('Aceptación parcial (06): pide el motivo y valida el IVA a acreditar', async () => {
+    await falla(() => conector.responderCompra(cB.id, { tipo: '06', condicion: '02', acreditar: 100 }), 'motivo');
+    await falla(() => conector.responderCompra(cB.id, { tipo: '06', detalle: 'Uso mixto', condicion: '02', acreditar: 5200000 }), 'menor que el IVA');
+    await falla(() => conector.responderCompra(cB.id, { tipo: '06', detalle: 'x'.repeat(161) }), '160');
+    ok(fila("SELECT ultimo FROM secuencias_receptor WHERE tipo = '06'").ultimo === 0, 'los intentos fallidos no gastan consecutivo');
+    // Computadora al 13 % usada para una actividad al 4 %: se acredita el 4 % de la base
+    const acreditar = 1600000;   // ₡16 000 en céntimos
+    const c = conector.responderCompra(cB.id, { tipo: '06', detalle: 'Se acredita solo el 4% (actividad con tarifa reducida)', condicion: '02', acreditar });
+    ok(c.mensaje.consecutivo === '00100001060000000001', c.mensaje.consecutivo);
+    await procesarTodo();
+    const x = enviado(c.mensaje.id).xml;
+    ok(x.includes('<Mensaje>2</Mensaje><DetalleMensaje>Se acredita solo el 4% (actividad con tarifa reducida)</DetalleMensaje>'), 'detalle');
+    ok(x.includes('<CondicionImpuesto>02</CondicionImpuesto><MontoTotalImpuestoAcreditar>16000.00000</MontoTotalImpuestoAcreditar>'), 'crédito parcial');
+    ok(x.includes('<MontoTotalDeGastoAplicable>' + xml.decimal5(fB.montos.total - 16000 * xml.U) + '</MontoTotalDeGastoAplicable>'), 'el resto es gasto');
+    ok(compras.obtenerPorId(cB.id).mensaje.estado_hacienda === 'aceptado');
+    return validarXsd('MR', x);
+  });
+  await prueba('Rechazo (07): motivo obligatorio, sin condición ni montos a acreditar', async () => {
+    await falla(() => conector.responderCompra(cC.id, { tipo: '07' }), 'motivo del rechazo');
+    const c = conector.responderCompra(cC.id, { tipo: '07', detalle: 'La mercadería llegó dañada & incompleta' });
+    ok(c.mensaje.consecutivo === '00100001070000000001', c.mensaje.consecutivo);
+    await procesarTodo();
+    const x = enviado(c.mensaje.id).xml;
+    ok(x.includes('<Mensaje>3</Mensaje><DetalleMensaje>La mercadería llegó dañada &amp; incompleta</DetalleMensaje><MontoTotalImpuesto>' + fC.impuesto + '</MontoTotalImpuesto><TotalFactura>'), 'rechazo');
+    ok(!/CondicionImpuesto|ImpuestoAcreditar|GastoAplicable|CodigoActividad/.test(x), 'sin crédito ni gasto');
+    ok(compras.obtenerPorId(cC.id).mensaje.estado_hacienda === 'aceptado', 'Hacienda aceptó el rechazo');
+    return validarXsd('MR', x);
+  });
+  await prueba('Reporte de IVA: el rechazo y el gasto sin crédito (04) no cuentan como crédito fiscal', async () => {
+    const antes = ivaPeriodo();
+    const c = conector.responderCompra(cD.id, { tipo: '05', condicion: '04' });
+    await procesarTodo();
+    const x = enviado(c.mensaje.id).xml;
+    ok(x.includes('<CondicionImpuesto>04</CondicionImpuesto><MontoTotalImpuestoAcreditar>0.00000</MontoTotalImpuestoAcreditar><MontoTotalDeGastoAplicable>' + fD.total + '</MontoTotalDeGastoAplicable>'), 'condición 04');
+    validarXsd('MR', x);
+    const despues = ivaPeriodo();
+    const ivaDe = (id) => compras.obtenerPorId(id).impuesto;
+    ok(antes.credito_no_acreditable === ivaDe(cC.id) + (ivaDe(cB.id) - 1600000), 'rechazo + parte no acreditada: ' + antes.credito_no_acreditable);
+    ok(despues.credito_no_acreditable - antes.credito_no_acreditable === ivaDe(cD.id), 'gasto 04');
+    ok(despues.credito_fiscal === despues.compras_iva - despues.credito_no_acreditable, 'crédito = IVA de compras − no acreditable');
+    ok(despues.iva_a_pagar === despues.debito_fiscal - despues.credito_fiscal);
+    ok(despues.compras_sin_aceptar === 1, 'solo cE queda por aceptar (la ajena y la manual no cuentan): ' + despues.compras_sin_aceptar);
+    return 'no acreditable ₡' + despues.credito_no_acreditable / 100 + ' · ' + despues.compras_sin_aceptar + ' compra(s) sin aceptar';
+  });
+  await prueba('Si Hacienda rechaza el mensaje: se guarda el motivo y se puede enviar otro', async () => {
+    haciendaConoce(fE, { total: '1.00000' });   // Hacienda tiene otro total: el mensaje no cuadra
+    const primero = conector.responderCompra(cE.id, { tipo: '05' }).mensaje;
+    await procesarTodo();
+    const m = compras.obtenerPorId(cE.id);
+    ok(m.mensaje === null && m.mensajes[0].estado_hacienda === 'rechazado' && /total de la factura no coincide/.test(m.mensajes[0].hacienda_mensaje), JSON.stringify(m.mensajes[0]));
+    ok(conector.estado().mensajesPorRevisar === 1 && conector.estado().problemas.some((p) => p.includes('Compras')));
+    haciendaConoce(fE);
+    const segundo = conector.responderCompra(cE.id, { tipo: '05' }).mensaje;
+    ok(segundo.consecutivo === '00100001050000000004' && segundo.id !== primero.id, segundo.consecutivo);
+    await procesarTodo();
+    ok(compras.obtenerPorId(cE.id).mensaje.estado_hacienda === 'aceptado' && conector.estado().mensajesPorRevisar === 0);
+    return primero.consecutivo + ' rechazado → ' + segundo.consecutivo + ' aceptado';
+  });
+  await prueba('Compra anulada: no se acepta, pero sí se puede rechazar', async () => {
+    const fF = facturaProveedor([lineaProv('Producto equivocado', 113000, 13)], { llave });
+    haciendaConoce(fF);
+    const cF = importarCompra(fF);
+    compras.anular(cF.id, 'El proveedor mandó otro producto');
+    await falla(() => conector.responderCompra(cF.id, { tipo: '05' }), 'anulada');
+    conector.responderCompra(cF.id, { tipo: '07', detalle: 'No corresponde a lo pedido' });
+    await procesarTodo();
+    ok(compras.obtenerPorId(cF.id).mensaje.estado_hacienda === 'aceptado');
+  });
+  await prueba('La clave de la compra debe ser la del XML', async () => {
+    const fG = facturaProveedor([lineaProv('Café molido', 452000, 13)], { llave });
+    const cG = importarCompra(fG, { clave: '506' + '9'.repeat(47) });
+    await falla(() => conector.responderCompra(cG.id, { tipo: '05' }), 'no coincide');
+  });
+  await prueba('Mensajes inmutables y consecutivo sin saltos', async () => {
+    await falla(() => sql('UPDATE mensajes_receptor SET total_factura = ? WHERE id = ?', '1.00000', mA.id), 'no se puede modificar');
+    await falla(() => sql('UPDATE mensajes_receptor SET detalle = ? WHERE id = ?', 'otro motivo', mA.id), 'no se puede modificar');
+    await falla(() => sql('DELETE FROM mensajes_receptor WHERE id = ?', mA.id), 'no se puede borrar');
+    await falla(() => sql('UPDATE mensajes_receptor SET xml_firmado = ? WHERE id = ?', '<x/>', mA.id), 'no se puede modificar');
+    await falla(() => sql("UPDATE mensajes_receptor SET estado_hacienda = 'pendiente' WHERE id = ?", mA.id), 'definitiva');
+    await falla(() => sql("UPDATE mensajes_receptor SET hacienda_respuesta = 'otra' WHERE id = ?", mA.id), 'definitiva');
+    await falla(() => sql("UPDATE secuencias_receptor SET ultimo = ultimo + 2 WHERE tipo = '05'"), '1 en 1');
+    await falla(() => sql("DELETE FROM secuencias_receptor WHERE tipo = '05'"), 'no se pueden borrar');
+    await falla(() => sql(`INSERT INTO mensajes_receptor(compra_id, tipo, numero, consecutivo, clave, fecha_emision, mensaje, emisor_tipo_id, emisor_identificacion,
+      receptor_tipo_id, receptor_identificacion, total_factura) VALUES(?, '05', 99, '00100001050000000099', ?, '2026-01-01', 1, '02', '3101999999', '02', '3101123456', '1.00000')`,
+      cD.id, fD.clave), 'no coincide con el consecutivo');
+    ok(conexion.verificarIntegridad().ok, JSON.stringify(conexion.verificarIntegridad().problemas));
+  });
+  await prueba('Con el envío desactivado no se crean mensajes', async () => {
+    const fH = facturaProveedor([lineaProv('Detergente', 339000, 13)], { llave });
+    const cH = importarCompra(fH);
+    conector.guardarConfiguracion({ activo: false, ambiente: 'pruebas', usuario: USUARIO });
+    await falla(() => conector.responderCompra(cH.id, { tipo: '05' }), 'Active el envío');
+    conector.guardarConfiguracion({ activo: true, ambiente: 'pruebas', usuario: USUARIO });
+    ok(conector.activo());
+  });
+
   console.log('\nSin internet');
   await prueba('Sin conexión la venta sigue, queda pendiente y la siguiente sale "sin internet"', async () => {
     sim.caido = true;
@@ -298,7 +492,10 @@ async function correr() {
     await procesarTodo();
     ok(ventas.obtenerPorId(v.id).estado_hacienda === 'aceptado');
   });
-  await prueba('El servidor simulado no encontró errores de firma ni de XSD', () => { ok(!sim.errores.length, sim.errores.join(' | ')); return sim.recibidos.length + ' XML validados'; });
+  await prueba('El servidor simulado no encontró errores de firma ni de XSD', () => {
+    ok(!sim.errores.length, sim.errores.join(' | '));
+    return sim.recibidos.length + ' XML validados (' + sim.recibidos.filter((r) => r.mensajeReceptor).length + ' mensajes de receptor)';
+  });
 
   console.log('\nPaso a producción');
   await prueba('No deja pasar a producción con comprobantes de pruebas en la base', () =>

@@ -32,6 +32,19 @@ const RAIZ = {
   '04': { elemento: 'TiqueteElectronico', ns: 'https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/tiqueteElectronico' }
 };
 
+/** Mensaje Receptor: aceptación o rechazo de una factura recibida de un proveedor. */
+const RAIZ_MENSAJE_RECEPTOR = { elemento: 'MensajeReceptor', ns: 'https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/mensajeReceptor' };
+/** Nota 3 y nota 11: tipo de documento del consecutivo → código del mensaje. */
+const MENSAJE_RECEPTOR = { '05': 1, '06': 2, '07': 3 };
+/** Nota 18: condición del IVA que se declara al aceptar la factura. */
+const CONDICION_IMPUESTO = {
+  '01': 'Genera crédito IVA',
+  '02': 'Genera crédito parcial del IVA',
+  '03': 'Bienes de capital',
+  '04': 'Gasto corriente, no genera crédito',
+  '05': 'Proporcionalidad'
+};
+
 /** Nota 8.1: tarifa de IVA (%) → CodigoTarifaIVA. */
 const CODIGO_TARIFA = {
   0: '10',     // Tarifa Exenta (Ley 9635, art. 8)
@@ -69,6 +82,6 @@ const POLITICA_FIRMA = {
 };
 
 module.exports = {
-  AMBIENTES, RAIZ, CODIGO_TARIFA, MEDIO_PAGO, UNIDAD, UNIDADES_SERVICIO,
+  AMBIENTES, RAIZ, RAIZ_MENSAJE_RECEPTOR, MENSAJE_RECEPTOR, CONDICION_IMPUESTO, CODIGO_TARIFA, MEDIO_PAGO, UNIDAD, UNIDADES_SERVICIO,
   DOC_REFERENCIA, CODIGO_REFERENCIA, LARGO_IDENTIFICACION, PROVINCIAS, POLITICA_FIRMA
 };

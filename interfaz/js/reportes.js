@@ -39,7 +39,11 @@ async function renderReportes() {
     el('div', { class: 'iva-ecuacion' }, [
       filaIva('IVA cobrado en ventas', iva.iva_ventas, ''), filaIva('− IVA devuelto (notas de crédito)', iva.iva_devoluciones, ''),
       filaIva('= Débito fiscal', iva.debito_fiscal, 'b'), filaIva('− IVA pagado en compras (crédito)', iva.credito_fiscal, ''),
-      filaIva(aPagar ? '= IVA a pagar' : '= Saldo a favor', Math.abs(iva.iva_a_pagar), 'b grande')])
+      iva.credito_no_acreditable ? el('div', { class: 'mini', style: 'text-align:right;margin-top:-2px',
+        text: 'Ya descuenta ' + money(iva.credito_no_acreditable) + ' de IVA sin crédito (facturas rechazadas o aceptadas como gasto ante Hacienda)' }) : null,
+      filaIva(aPagar ? '= IVA a pagar' : '= Saldo a favor', Math.abs(iva.iva_a_pagar), 'b grande'),
+      iva.compras_sin_aceptar ? el('div', { class: 'mini', style: 'margin-top:6px',
+        text: plural(iva.compras_sin_aceptar, 'factura de compra importada todavía no está aceptada', 'facturas de compra importadas todavía no están aceptadas') + ' ante Hacienda: ' + (iva.compras_sin_aceptar === 1 ? 'acéptela' : 'acéptelas') + ' en Compras para respaldar el crédito.' }) : null])
   ]));
   const tbIva = el('tbody', {}, iva.tarifas.length ? iva.tarifas.map((t) => el('tr', {}, [
     el('td', { text: t.tarifa ? 'IVA ' + t.tarifa + '%' : 'Exento' }), el('td', { class: 'der', text: money(t.ventas_base - t.nc_base) }),

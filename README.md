@@ -11,6 +11,8 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 - Firma cada comprobante (XML 4.4 + firma XAdES-EPES con la llave
   criptográfica) y lo envía a la API de Hacienda en segundo plano. Si no hay
   internet la caja sigue vendiendo y los envía solos al volver la conexión.
+- **Acepta o rechaza ante Hacienda** las facturas electrónicas de los
+  proveedores (Mensaje Receptor), lo que respalda su IVA como crédito fiscal.
 - Calcula en todo momento el **IVA a pagar a Hacienda** (lo cobrado en ventas
   menos lo pagado en compras) y el **balance de entradas y salidas**.
 - Los datos fiscales **no se pueden modificar ni borrar**: la base de datos lo
@@ -45,7 +47,7 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 |---|---|
 | **Caja** (F1) | Escanear o buscar productos y cobrar en efectivo (con cambio), tarjeta o SINPE. Sin cliente emite un **tiquete**; con cliente (identificación + nombre) emite una **factura**. Cada comprobante sale con su **consecutivo** y **clave** de 50 dígitos. |
 | **Ventas** (F2) | Todos los comprobantes emitidos, con su **estado en Hacienda** (pendiente, en validación, aceptado, rechazado). Ver, reimprimir, descargar el **XML firmado** y la **respuesta de Hacienda**, emitir **nota de crédito** (anula la venta y devuelve el inventario) y **reemitir** un comprobante rechazado. Exportar a Excel. |
-| **Compras** (F3) | Registrar las **facturas de proveedores**: a mano o **importando el XML** de la factura electrónica. Suma el inventario, actualiza el costo promedio y guarda el IVA pagado. Anular una compra mal registrada. |
+| **Compras** (F3) | Registrar las **facturas de proveedores**: a mano o **importando el XML** de la factura electrónica. Suma el inventario, actualiza el costo promedio y guarda el IVA pagado. **Aceptar** (total o parcial) o **rechazar** la factura ante Hacienda con el Mensaje Receptor, y ver su estado (columna *Hacienda*). Anular una compra mal registrada. |
 | **Inventario** (F4) | Productos con CABYS, tarifa de IVA, costo, precio y existencia. **Kárdex** por producto (cada entrada y salida con su documento). Ajustes de inventario con motivo (conteo físico, merma, vencido…). Alertas de stock bajo y vencimientos. |
 | **Reportes** (F5) | **IVA a pagar** del período (débito − crédito) y desglose por tarifa. Ventas netas, costo de lo vendido, utilidad, compras. **Entradas y salidas** de inventario. Ventas por día, medios de pago, más vendidos. Exportar ventas, compras e IVA a Excel. |
 | **Cierre** (F6) | Turno de caja: fondo inicial, ventas por medio de pago, arqueo de efectivo (esperado vs. contado) y cierre con **reporte Z**. Al cerrar se hace un respaldo automático. |
@@ -58,6 +60,7 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 | Tema | Cómo lo hace |
 |---|---|
 | Comprobantes | `04` tiquete electrónico, `01` factura electrónica, `03` nota de crédito. |
+| Mensaje Receptor | Para las facturas de compra: `05` aceptación, `06` aceptación parcial, `07` rechazo, con su propio consecutivo de 20 dígitos (ver [Aceptar o rechazar facturas de compra](#aceptar-o-rechazar-facturas-de-compra-mensaje-receptor)). |
 | Consecutivo (20 dígitos) | sucursal (3) + terminal (5) + tipo (2) + número (10). Cada tipo lleva su propia numeración, **sin saltos ni repetidos**. |
 | Clave (50 dígitos) | 506 + fecha (ddmmaa) + cédula del emisor (12) + consecutivo (20) + situación (1) + código de seguridad (8). |
 | Precios de venta | Incluyen IVA. El sistema separa base e impuesto por línea: `base = total ÷ (1 + tarifa)`. |
@@ -65,7 +68,7 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 | Tarifas de IVA | 0 %, 0,5 %, 1 %, 2 %, 4 %, 8 % y 13 %. |
 | CABYS | 13 dígitos por producto. Con Hacienda activo, un producto sin CABYS no se puede vender (Inventario lo marca). |
 | XML | Versión **4.4** de los Anexos y Estructuras, validado contra los XSD oficiales. Montos con 5 decimales: el IVA siempre es exactamente base × tarifa. |
-| IVA a pagar | **IVA cobrado en ventas − IVA devuelto en notas de crédito − IVA pagado en compras vigentes.** Si da negativo, es saldo a favor. Es la base para la declaración mensual: validala con el contador (proporcionalidad, gastos no deducibles, etc.). |
+| IVA a pagar | **IVA cobrado en ventas − IVA devuelto en notas de crédito − IVA pagado en compras vigentes.** Del crédito se descuenta lo que el Mensaje Receptor declaró sin crédito: facturas rechazadas, gasto corriente (condición 04) y la parte no acreditada de un crédito parcial (02). Si da negativo, es saldo a favor. Es la base para la declaración mensual: validala con el contador (proporcionalidad, gastos no deducibles, etc.). |
 | Inventario | Costo promedio ponderado. Cada movimiento (inicial, compra, venta, nota de crédito, ajuste, anulación) queda en el kárdex. |
 | Dinero | Se guarda en **céntimos enteros** (₡1 250,50 = 125050): sin errores de redondeo. |
 
@@ -87,6 +90,9 @@ alguien abra el archivo con otro programa, SQLite rechaza:
 - Cambiar el XML de un comprobante una vez que Hacienda lo recibió, o cambiar
   la respuesta de Hacienda (aceptado/rechazado es definitivo).
 - Reemplazar un comprobante que no fue rechazado, o reemplazarlo dos veces.
+- Modificar o borrar un Mensaje Receptor, saltarse su consecutivo, tener dos
+  mensajes en curso para la misma compra, mandarlo con una clave distinta a la
+  de la compra, o aceptar una compra anulada.
 
 Además:
 
@@ -126,10 +132,13 @@ besalu-mercat-pos/
 │   └── hacienda/               ← Conexión propia con Hacienda
 │       ├── catalogos.js        ← Códigos oficiales (tarifas, medios de pago, URLs…).
 │       ├── xml.js              ← XML 4.4 de tiquete, factura y nota de crédito.
+│       ├── receptor.js         ← Mensaje Receptor: lee la factura del proveedor y arma
+│       │                         la aceptación o el rechazo.
 │       ├── firma.js            ← Llave .p12 y firma XAdES-EPES.
 │       ├── api.js              ← Token del IdP, envío y consulta de estado.
 │       ├── credenciales.js     ← Secretos cifrados con el sistema operativo.
-│       └── conector.js         ← Cola: firma, envía en orden, consulta, reintenta.
+│       └── conector.js         ← Colas (comprobantes y mensajes): firma, envía en orden,
+│                                 consulta, reintenta.
 │
 ├── interfaz/                   ← Lo que ve el cajero
 │   ├── index.html · estilos.css
@@ -147,11 +156,12 @@ besalu-mercat-pos/
 ├── recursos/                   ← Ícono, imagen y licencia del instalador.
 ├── pruebas/
 │   ├── datos.prueba.js         ← Reglas fiscales, protecciones, respaldos, velocidad.
-│   ├── hacienda.prueba.js      ← XML, firma, envío, rechazos, sin internet, producción.
+│   ├── hacienda.prueba.js      ← XML, firma, envío, rechazos, Mensaje Receptor, sin internet,
+│   │                             producción.
 │   ├── prueba-completa.js      ← La app real de punta a punta.
 │   ├── hacienda-simulada.js    ← Servidor que imita a Hacienda (verifica firma y XSD).
 │   ├── llave-prueba.js         ← Genera una llave .p12 falsa para probar.
-│   └── esquemas/               ← XSD oficiales v4.4 de Hacienda.
+│   └── esquemas/               ← XSD oficiales v4.4 de Hacienda (incluye MensajeReceptor).
 ├── .github/workflows/release.yml ← Compila el .exe en GitHub y publica el Release.
 ├── package.json · GUIA-VERSIONES.md · DOCKER.md · README.md
 ```
@@ -185,8 +195,9 @@ IVA, el consecutivo y la clave los calcula el sistema con los datos de la base.
 | `productos` | Código, nombre, CABYS, unidad, tarifa IVA, precio (con IVA), costo promedio (sin IVA), existencia, mínimo, vencimiento. |
 | `comprobantes` / `comprobante_lineas` | Tiquetes, facturas y notas de crédito con consecutivo, clave, receptor, totales e IVA por línea. Estado en Hacienda, XML firmado y respuesta de Hacienda, y el reemplazo de un rechazado. |
 | `compras` / `compra_lineas` | Facturas de proveedores con número, clave, fecha, subtotal, IVA, total y el XML original. |
+| `mensajes_receptor` | Aceptación o rechazo de cada factura de compra ante Hacienda: consecutivo, condición del IVA, montos tal como en la factura, estado en Hacienda, XML firmado y respuesta. |
 | `movimientos` | Kárdex: cada entrada y salida de inventario con su documento. |
-| `secuencias` | Último número usado por tipo de comprobante. |
+| `secuencias` · `secuencias_receptor` | Último número usado por tipo de comprobante (01, 03, 04) y de mensaje (05, 06, 07). |
 | `turnos` | Turnos de caja con fondo, esperado, contado y diferencia. |
 | `clientes` · `proveedores` | Se guardan solos al facturar o registrar compras. |
 | `bitacora` | Registro de cada acción importante (no se puede borrar). |
@@ -280,6 +291,44 @@ Cobrar ─▶ comprobante guardado (consecutivo + clave) ─▶ ticket impreso
 - El indicador de la barra superior dice si Hacienda está **al día**,
   **enviando**, **sin conexión** o si hay **comprobantes por revisar**.
 
+### Aceptar o rechazar facturas de compra (Mensaje Receptor)
+
+Cuando un proveedor le factura al negocio, el negocio confirma esa factura ante
+Hacienda. Aceptarla es lo que **respalda su IVA como crédito fiscal**.
+
+1. Registrar la compra en **Compras → Importar XML** (la factura electrónica que
+   manda el proveedor). Una compra registrada a mano no se puede aceptar: el
+   mensaje lleva los montos exactos de la factura.
+2. Abrir la compra. En **Hacienda · Mensaje Receptor**:
+   - **Aceptar ante Hacienda**: aceptación **total** (05) o **parcial** (06,
+     con motivo). Se elige la **condición del IVA** (nota 18 del Anexo):
+     01 genera crédito (todo), 02 crédito parcial (se indica el IVA a acreditar
+     y el resto queda como gasto), 03 bienes de capital, 04 gasto corriente sin
+     crédito, 05 proporcionalidad.
+   - **Rechazar** (07), con el motivo. Si la mercadería no se recibió, además
+     se **anula** la compra para sacarla del inventario. Una compra anulada se
+     puede rechazar, pero no aceptar.
+3. El mensaje se firma con la llave del negocio y se envía solo, en la misma
+   cola que las ventas (también sin internet). La columna **Hacienda** de
+   Compras muestra *Sin aceptar*, *En validación*, *Factura aceptada*,
+   *Aceptada parcialmente* o *Factura rechazada*.
+4. Si Hacienda **no acepta el mensaje** (por ejemplo, porque todavía no tiene
+   la factura del proveedor), se ve el motivo y se puede enviar uno nuevo.
+
+Reglas que aplica (Anexos y Estructuras v4.4):
+
+| Campo | Cómo se llena |
+|---|---|
+| `Clave`, `NumeroCedulaEmisor`, `TotalFactura`, `MontoTotalImpuesto` | Tal cual vienen en el XML de la factura del proveedor (deben coincidir). |
+| `NumeroCedulaReceptor` | La cédula del negocio. Si la factura está a nombre de otra cédula, no deja aceptarla. |
+| `NumeroConsecutivoReceptor` | sucursal + terminal + `05`/`06`/`07` + número: cada tipo con su numeración. |
+| `DetalleMensaje` | Obligatorio (5 a 160 caracteres) en aceptación parcial y rechazo. |
+| `CodigoActividad` | La actividad económica del negocio (no va con proporcionalidad). |
+| `CondicionImpuesto` · `MontoTotalImpuestoAcreditar` · `MontoTotalDeGastoAplicable` | Solo al aceptar una factura con IVA. Acreditar + gasto = total de la factura. No van en el rechazo, y con proporcionalidad (05) solo va la condición. |
+
+Se guardan el **XML del mensaje** y la **respuesta de Hacienda**
+(`clave-consecutivo.xml` y `clave-consecutivo_respuesta.xml`).
+
 ### Qué se necesita (todo sale de TRIBU-CR)
 
 En la Oficina Virtual (OVi) de **TRIBU-CR**, con la cuenta del negocio:
@@ -320,9 +369,9 @@ En la Oficina Virtual (OVi) de **TRIBU-CR**, con la cuenta del negocio:
 | | |
 |---|---|
 | Autenticación | OpenID Connect (Keycloak) con `grant_type=password`; realm `rut-stag` / cliente `api-stag` en pruebas, `rut` / `api-prod` en producción. El token se renueva con el *refresh token*. |
-| Envío | `POST https://api-sandbox.comprobanteselectronicos.go.cr/recepcion/v1/recepcion` (pruebas) o `https://api.comprobanteselectronicos.go.cr/recepcion/v1/recepcion` (producción), con el XML firmado en Base64. |
+| Envío | `POST https://api-sandbox.comprobanteselectronicos.go.cr/recepcion/v1/recepcion` (pruebas) o `https://api.comprobanteselectronicos.go.cr/recepcion/v1/recepcion` (producción), con el XML firmado en Base64. El Mensaje Receptor va con la clave y el emisor de la factura del proveedor, el negocio como receptor y su `consecutivoReceptor`; su estado se consulta en `GET /recepcion/{clave}-{consecutivoReceptor}`. |
 | Firma | XAdES-EPES: C14N 1.0, RSA-SHA256, tres referencias SHA-256 (documento *enveloped*, KeyInfo, SignedProperties), política de firma de la *Resolución General sobre disposiciones técnicas* con su SHA-256. El XML se escribe ya canonicalizado. |
-| Pruebas | `npm run prueba:hacienda`: el XML se valida contra los **XSD oficiales v4.4**, la firma se verifica con una librería independiente (`xml-crypto`) y se compara con la canonicalización de `xmllint`; todo el flujo (envío, rechazo, reemisión, sin internet, credenciales malas, paso a producción) se prueba contra un servidor que imita a Hacienda. |
+| Pruebas | `npm run prueba:hacienda`: el XML se valida contra los **XSD oficiales v4.4**, la firma se verifica con una librería independiente (`xml-crypto`) y se compara con la canonicalización de `xmllint`; todo el flujo (envío, rechazo, reemisión, Mensaje Receptor, sin internet, credenciales malas, paso a producción) se prueba contra un servidor que imita a Hacienda. |
 
 > **Importante:** todo está probado contra los esquemas oficiales y un Hacienda
 > simulado. La primera prueba con el **sandbox real** se hace con las
@@ -361,8 +410,8 @@ donde se esté trabajando, y no se buscan actualizaciones.
 ```bash
 npm run prueba            # las tres juntas
 npm run prueba:datos      # 39 pruebas de reglas fiscales y protecciones
-npm run prueba:hacienda   # 35 pruebas de la conexión con Hacienda
-npm run prueba:app        # 32 pruebas con la app real, de punta a punta
+npm run prueba:hacienda   # 50 pruebas de la conexión con Hacienda
+npm run prueba:app        # 34 pruebas con la app real, de punta a punta
 ```
 
 Todas usan una carpeta temporal y **no tocan** los datos del negocio. Las de
@@ -384,16 +433,20 @@ tiquete, factura, nota de crédito y reemplazo cumplen el XSD oficial; que la
 firma es válida y detecta cualquier cambio; que los secretos no quedan en texto
 plano; las validaciones antes de emitir (CABYS, identificación del cliente,
 datos del emisor); el envío en orden y la aceptación; el rechazo con su motivo
-y la reemisión; el modo sin internet; contraseña incorrecta; error de esquema y
-reintento; y el paso a producción.
+y la reemisión; el Mensaje Receptor (aceptación total, parcial y rechazo con su
+consecutivo propio, montos tomados de la factura del proveedor, XSD oficial y
+firma, factura a nombre de otra cédula, compra registrada a mano o anulada,
+mensaje rechazado por Hacienda y reenvío, protecciones de la base y su efecto en
+el reporte de IVA); el modo sin internet; contraseña incorrecta; error de
+esquema y reintento; y el paso a producción.
 
 **`prueba:app`** hace lo mismo que el personal: configura el negocio, conecta
 Hacienda desde Ajustes, crea un
 producto, importa una factura de proveedor en XML (y comprueba que no se puede
-registrar dos veces), abre caja, vende en efectivo con cambio, verifica que al
+registrar dos veces), la acepta ante Hacienda desde el detalle de la compra, abre caja, vende en efectivo con cambio, verifica que al
 imprimir solo sale el comprobante, factura a un cliente por SINPE, emite una
 nota de crédito, revisa el IVA y el balance en Reportes, cierra caja con Z,
-comprueba que Hacienda aceptó todo, respalda, **reinicia la app** y comprueba
+comprueba que Hacienda aceptó todo (también el Mensaje Receptor), respalda, **reinicia la app** y comprueba
 que todo quedó guardado e íntegro.
 
 ---
@@ -442,10 +495,9 @@ Medido con las pruebas:
 ## Pendientes
 
 - **Primera prueba con el sandbox real de Hacienda** usando las credenciales
-  de pruebas del negocio.
+  de pruebas del negocio (ventas y también un Mensaje Receptor de una factura
+  real de un proveedor).
 - **Enviar la factura al correo del cliente** (XML + PDF): Hacienda pide que el
   emisor se la haga llegar al receptor. Hoy se descargan desde Ventas.
-- **Aceptar o rechazar las facturas de compra** ante Hacienda (Mensaje Receptor),
-  para respaldar el crédito fiscal.
 - **Firma de código** (quita el aviso "Editor desconocido"): ver GUIA-VERSIONES.md.
 - **Logo real** del negocio para el ícono y el instalador (`recursos/`).

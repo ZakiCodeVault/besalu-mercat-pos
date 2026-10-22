@@ -60,7 +60,8 @@ function iva(desde, hasta) {
     ['Tarifa', 'Ventas (base)', 'IVA cobrado', 'Devoluciones (base)', 'IVA devuelto', 'Compras (base)', 'IVA pagado']];
   for (const t of r.tarifas) filas.push([t.tarifa + '%', colones(t.ventas_base), colones(t.ventas_iva), colones(t.nc_base), colones(t.nc_iva), colones(t.compras_base), colones(t.compras_iva)]);
   filas.push([], ['IVA cobrado en ventas', colones(r.iva_ventas)], ['IVA devuelto (notas de crédito)', colones(r.iva_devoluciones)],
-    ['Débito fiscal', colones(r.debito_fiscal)], ['Crédito fiscal (IVA de compras)', colones(r.credito_fiscal)],
+    ['Débito fiscal', colones(r.debito_fiscal)], ['IVA pagado en compras', colones(r.compras_iva)],
+    ['IVA de compras sin crédito (Mensaje Receptor)', colones(r.credito_no_acreditable)], ['Crédito fiscal', colones(r.credito_fiscal)],
     [r.iva_a_pagar >= 0 ? 'IVA A PAGAR' : 'SALDO A FAVOR', colones(Math.abs(r.iva_a_pagar))]);
   return csv(filas);
 }

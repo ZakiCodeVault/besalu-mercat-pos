@@ -9,10 +9,14 @@
  *    registrar dos veces: evita contar doble el IVA.
  *  - Una compra no se edita: si hubo un error se ANULA (revierte inventario)
  *    y se registra de nuevo.
+ *  - Una factura electrónica importada se acepta o rechaza ante Hacienda con
+ *    un Mensaje Receptor (05 aceptación, 06 parcial, 07 rechazo), que lleva su
+ *    propio consecutivo y no se modifica ni se borra.
  */
-const { obtener, registrar } = require('./conexion');
-const { validarTarifa, validarCantidad, lineaCompra, fechaLocal } = require('./montos');
+const { obtener, registrar, leerAjustes } = require('./conexion');
+const { validarTarifa, validarCantidad, lineaCompra, consecutivo, fechaIso, fechaLocal } = require('./montos');
 const productos = require('./productos');
+const { motivoNoAceptable } = require('../hacienda/receptor');   // solo lee el XML del proveedor
 
 function entero(v, campo) {
   const n = Number(v == null ? 0 : v);
@@ -141,10 +145,64 @@ function obtenerPorId(id) {
   const c = d.prepare(`SELECT c.*, p.nombre AS proveedor_nombre, p.identificacion AS proveedor_identificacion, p.tipo_id AS proveedor_tipo_id
                        FROM compras c JOIN proveedores p ON p.id = c.proveedor_id WHERE c.id = ?`).get(id);
   if (!c) return null;
+  c.tiene_xml = !!c.xml_original;
+  // Una factura a nombre de otra cédula, sin receptor o un tiquete no se acepta ante Hacienda
+  c.no_aceptable = c.xml_original ? motivoNoAceptable(c.xml_original, leerAjustes()) : null;
   delete c.xml_original;
   c.lineas = d.prepare(`SELECT l.*, pr.codigo AS producto_codigo FROM compra_lineas l
                         LEFT JOIN productos pr ON pr.id = l.producto_id WHERE l.compra_id = ? ORDER BY l.linea`).all(id);
+  // Mensajes de receptor, el más reciente primero; el "vigente" es el que Hacienda no rechazó
+  c.mensajes = d.prepare(`SELECT ${CAMPOS_MENSAJE} FROM mensajes_receptor WHERE compra_id = ? ORDER BY id DESC`).all(id);
+  c.mensaje = c.mensajes.find((m) => m.estado_hacienda !== 'rechazado') || null;
   return c;
+}
+
+/* ---------------- Mensaje Receptor ---------------- */
+const NOMBRE_MENSAJE = { '05': 'Aceptación', '06': 'Aceptación parcial', '07': 'Rechazo' };
+const CAMPOS_MENSAJE = `id, compra_id, tipo, numero, consecutivo, clave, fecha_emision, mensaje, detalle, condicion_impuesto,
+  monto_impuesto, impuesto_acreditar, gasto_aplicable, total_factura, estado_hacienda, hacienda_mensaje, hacienda_error,
+  hacienda_fecha, hacienda_ambiente, xml_firmado IS NOT NULL AS tiene_xml_firmado, hacienda_respuesta IS NOT NULL AS tiene_respuesta`;
+
+/** XML original de la factura (para el mensaje) y su estado. */
+function facturaDe(id) {
+  return obtener().prepare('SELECT id, estado, clave, numero_documento, xml_original FROM compras WHERE id = ?').get(id) || null;
+}
+
+/**
+ * Registra el mensaje de receptor de una compra: reserva el consecutivo (05/06/07)
+ * y lo deja pendiente para que la cola lo firme y lo envíe.
+ * @param {number} compraId
+ * @param {object} m campos calculados con hacienda/receptor.calcular()
+ */
+function registrarMensaje(compraId, m) {
+  const d = obtener();
+  const aj = leerAjustes();
+  return d.transaction(() => {
+    const c = d.prepare('SELECT id, estado, clave, numero_documento FROM compras WHERE id = ?').get(compraId);
+    if (!c) throw new Error('La compra no existe');
+    const enCurso = d.prepare("SELECT tipo, consecutivo FROM mensajes_receptor WHERE compra_id = ? AND estado_hacienda <> 'rechazado'").get(compraId);
+    if (enCurso) throw new Error('Esta factura ya tiene ' + NOMBRE_MENSAJE[enCurso.tipo].toLowerCase() + ' ante Hacienda (' + enCurso.consecutivo + ')');
+    if (m.tipo !== '07' && c.estado !== 'vigente') throw new Error('Una compra anulada no se puede aceptar ante Hacienda (sí se puede rechazar)');
+    if (!c.clave || c.clave !== m.clave) throw new Error('La clave registrada en la compra no coincide con la del XML de la factura');
+
+    d.prepare('UPDATE secuencias_receptor SET ultimo = ultimo + 1 WHERE tipo = ?').run(m.tipo);
+    const numero = d.prepare('SELECT ultimo FROM secuencias_receptor WHERE tipo = ?').get(m.tipo).ultimo;
+    const fila = Object.assign({}, m, { compra_id: compraId, numero, consecutivo: consecutivo(aj.sucursal, aj.terminal, m.tipo, numero), fecha_emision: fechaIso() });
+    const r = d.prepare(`INSERT INTO mensajes_receptor(compra_id, tipo, numero, consecutivo, clave, fecha_emision, mensaje, detalle,
+        emisor_tipo_id, emisor_identificacion, receptor_tipo_id, receptor_identificacion, codigo_actividad, condicion_impuesto,
+        monto_impuesto, impuesto_acreditar, gasto_aplicable, total_factura)
+      VALUES(@compra_id, @tipo, @numero, @consecutivo, @clave, @fecha_emision, @mensaje, @detalle,
+        @emisor_tipo_id, @emisor_identificacion, @receptor_tipo_id, @receptor_identificacion, @codigo_actividad, @condicion_impuesto,
+        @monto_impuesto, @impuesto_acreditar, @gasto_aplicable, @total_factura)`).run(fila);
+    registrar('mensaje_receptor', { id: Number(r.lastInsertRowid), compra: compraId, factura: c.numero_documento, tipo: NOMBRE_MENSAJE[m.tipo],
+      consecutivo: fila.consecutivo, condicion: m.condicion_impuesto, acreditar: m.impuesto_acreditar });
+    return Number(r.lastInsertRowid);
+  })();
+}
+
+/** Mensaje completo (con XML y respuesta). */
+function obtenerMensaje(id) {
+  return obtener().prepare('SELECT * FROM mensajes_receptor WHERE id = ?').get(id) || null;
 }
 
 function listar({ desde, hasta, texto, limite = 300 } = {}) {
@@ -152,17 +210,26 @@ function listar({ desde, hasta, texto, limite = 300 } = {}) {
   if (desde) { cond.push('c.fecha >= @desde'); par.desde = desde; }
   if (hasta) { cond.push('c.fecha <= @hasta'); par.hasta = hasta; }
   if (texto) { cond.push('(c.numero_documento LIKE @t OR p.nombre LIKE @t OR p.identificacion LIKE @t)'); par.t = '%' + texto + '%'; }
+  const aj = leerAjustes();
   return obtener().prepare(`
     SELECT c.id, c.fecha, c.numero_documento, c.tipo_documento, c.subtotal, c.impuesto, c.otros_cargos, c.total, c.estado,
            p.nombre AS proveedor, p.identificacion AS proveedor_identificacion,
-           (SELECT count(*) FROM compra_lineas l WHERE l.compra_id = c.id) AS lineas
+           (SELECT count(*) FROM compra_lineas l WHERE l.compra_id = c.id) AS lineas,
+           c.xml_original IS NOT NULL AS tiene_xml, m.tipo AS mensaje_tipo, m.estado_hacienda AS mensaje_estado,
+           CASE WHEN m.id IS NULL THEN c.xml_original END AS xml_sin_mensaje
     FROM compras c JOIN proveedores p ON p.id = c.proveedor_id
+    LEFT JOIN mensajes_receptor m ON m.compra_id = c.id AND m.estado_hacienda <> 'rechazado'
     ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''}
-    ORDER BY c.fecha DESC, c.id DESC LIMIT @limite`).all(par);
+    ORDER BY c.fecha DESC, c.id DESC LIMIT @limite`).all(par).map((c) => {
+    // Pendiente de aceptar ante Hacienda: factura importada, a nombre del negocio, sin mensaje en curso
+    c.por_aceptar = !!c.xml_sin_mensaje && c.estado === 'vigente' && !motivoNoAceptable(c.xml_sin_mensaje, aj);
+    delete c.xml_sin_mensaje;
+    return c;
+  });
 }
 
 function listarProveedores() {
   return obtener().prepare('SELECT * FROM proveedores ORDER BY nombre COLLATE NOCASE').all();
 }
 
-module.exports = { registrarCompra, anular, obtenerPorId, listar, listarProveedores };
+module.exports = { registrarCompra, anular, obtenerPorId, listar, listarProveedores, facturaDe, registrarMensaje, obtenerMensaje };

@@ -20,6 +20,7 @@ function amigable(e) {
   if (m.includes('FOREIGN KEY constraint failed')) return 'No se puede: hay registros que dependen de este';
   if (m.startsWith('CHECK constraint failed')) return 'Dato inválido: ' + m.replace('CHECK constraint failed: ', '');
   if (m.includes('UNIQUE constraint failed: comprobantes.sustituye_id')) return 'Este comprobante ya fue reemplazado';
+  if (m.includes('UNIQUE constraint failed: mensajes_receptor.compra_id')) return 'Esta factura ya tiene un mensaje en curso ante Hacienda';
   return m;
 }
 
@@ -78,6 +79,23 @@ function registrar(ctx) {
   manejar('compras:listar', (f) => compras.listar(f || {}));
   manejar('compras:obtener', (id) => compras.obtenerPorId(id));
   manejar('compras:anular', (id, razon) => compras.anular(id, razon));
+  // Mensaje Receptor: aceptar o rechazar la factura ante Hacienda (se envía en segundo plano)
+  manejar('compras:datosMensaje', (id) => hacienda.datosMensaje(id));
+  manejar('compras:responder', (id, o) => hacienda.responderCompra(id, o || {}));
+  manejar('compras:reintentarMensaje', (id) => hacienda.reintentarMensaje(id));
+  manejar('compras:guardarXmlMensaje', async (id, cual) => {
+    const m = compras.obtenerMensaje(id);
+    if (!m) throw new Error('El mensaje no existe');
+    const contenido = cual === 'respuesta' ? m.hacienda_respuesta : m.xml_firmado;
+    if (!contenido) throw new Error(cual === 'respuesta' ? 'Todavía no hay respuesta de Hacienda' : 'El XML todavía no se ha generado');
+    const nombre = m.clave + '-' + m.consecutivo + (cual === 'respuesta' ? '_respuesta' : '') + '.xml';
+    const r = await dialog.showSaveDialog(ctx.ventana(), {
+      title: 'Guardar XML', defaultPath: path.join(app.getPath('documents'), nombre), filters: [{ name: 'XML', extensions: ['xml'] }]
+    });
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, contenido, 'utf8');
+    return { ruta: r.filePath };
+  });
   manejar('proveedores:listar', () => compras.listarProveedores());
 
   /* ---- caja ---- */

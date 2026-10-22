@@ -3,8 +3,8 @@
  *
  * Usa una carpeta de datos temporal (no toca los datos del negocio) y recorre el
  * día de trabajo: configurar negocio → conectar Hacienda → producto → compra desde
- * XML → abrir caja → vender → facturar → nota de crédito → Hacienda acepta → IVA →
- * cierre Z → respaldo → reiniciar.
+ * XML → aceptarla ante Hacienda → abrir caja → vender → facturar → nota de crédito →
+ * Hacienda acepta → IVA → cierre Z → respaldo → reiniciar.
  *
  * Hacienda es un servidor local simulado (verifica firma y XSD) y la llave .p12
  * es falsa: nada sale de esta computadora.
@@ -54,6 +54,7 @@ const XML_PROVEEDOR = `<?xml version="1.0" encoding="utf-8"?>
   <NumeroConsecutivo>00100001010000004521</NumeroConsecutivo>
   <FechaEmision>${require('../principal/datos/montos').fechaIso()}</FechaEmision>
   <Emisor><Nombre>Distribuidora Central S.A.</Nombre><Identificacion><Tipo>02</Tipo><Numero>3101999999</Numero></Identificacion><CorreoElectronico>ventas@dc.cr</CorreoElectronico></Emisor>
+  <Receptor><Nombre>Besalú Mercat S.A.</Nombre><Identificacion><Tipo>02</Tipo><Numero>3101123456</Numero></Identificacion></Receptor>
   <DetalleServicio>
     <LineaDetalle><NumeroLinea>1</NumeroLinea><CodigoCABYS>2211000000000</CodigoCABYS><CodigoComercial><Tipo>04</Tipo><Codigo>7441001100118</Codigo></CodigoComercial>
       <Cantidad>24</Cantidad><UnidadMedida>Unid</UnidadMedida><Detalle>Leche Dos Pinos 1L</Detalle><PrecioUnitario>975.00</PrecioUnitario><MontoTotal>23400.00</MontoTotal><SubTotal>23400.00</SubTotal>
@@ -167,6 +168,19 @@ async function correr() {
   verificar('No permite registrar la misma factura dos veces', await js('(async () => (await BESALU.compras.listar({})).length === 1)()'));
   await js('while (hayModal()) cerrarModal(); true');
 
+  // ---- Aceptar la factura de compra ante Hacienda (Mensaje Receptor) ----
+  await js(`(async () => { const l = await BESALU.compras.listar({}); await verCompra(l[0].id); })(); true`); await esperar(400);
+  const antesMr = await js(`({ pill: __modal().querySelector('.hseccion .pill').textContent, botones: [...__modal().querySelectorAll('.hseccion button')].map(b => b.textContent) })`);
+  await js(`__boton('Aceptar ante Hacienda', __modal()).click(); true`); await esperar(500);
+  const formMr = await js(`({ titulo: __modal().querySelector('h2').textContent, resumen: __modal().querySelector('.totales-compra').textContent })`);
+  await js(`__boton('Enviar a Hacienda', __modal()).click(); true`); await esperar(700);
+  const mr = await js(`(async () => { const c = await BESALU.compras.obtener((await BESALU.compras.listar({}))[0].id);
+    return { cons: c.mensaje && c.mensaje.consecutivo, condicion: c.mensaje && c.mensaje.condicion_impuesto, abierta: !!document.querySelector('#modalRoot [data-compra]') }; })()`);
+  verificar('Aceptar la factura de compra ante Hacienda (Mensaje Receptor 05, desde el detalle)',
+    antesMr.pill === 'Sin aceptar' && antesMr.botones.includes('Rechazar') && formMr.resumen.includes('IVA a acreditar') && mr.cons === '00100001050000000001' && mr.condicion === '01' && mr.abierta,
+    formMr.titulo + ' · ' + mr.cons);
+  await js('while (hayModal()) cerrarModal(); true');
+
   // ---- Abrir caja y vender ----
   await js(`go('caja'); modalAbrirCaja(); __boton('Abrir caja', __modal()).click(); true`); await esperar(500);
   verificar('Abrir caja con fondo', await js('!!App.turno && App.turno.fondo === 5000000'));
@@ -228,11 +242,21 @@ async function correr() {
   let pendientes = 99;
   for (let i = 0; i < 40 && pendientes; i++) {
     await esperar(500);
-    pendientes = await js("(async () => (await BESALU.ventas.listar({})).filter(c => c.estado_hacienda !== 'aceptado').length)()");
+    pendientes = await js(`(async () => (await BESALU.ventas.listar({})).filter(c => c.estado_hacienda !== 'aceptado').length
+      + (await BESALU.compras.listar({})).filter(c => c.mensaje_estado !== 'aceptado').length)()`);
   }
   const hz = await js("(async () => { const l = await BESALU.ventas.listar({}); return { n: l.length, estados: [...new Set(l.map(c => c.estado_hacienda))].join(',') }; })()");
-  verificar('Hacienda aceptó los ' + hz.n + ' comprobantes (enviados solos, en segundo plano)', pendientes === 0 && sim.recibidos.length === hz.n && !sim.errores.length,
+  const comprobantesRecibidos = sim.recibidos.filter((r) => !r.mensajeReceptor).length;
+  verificar('Hacienda aceptó los ' + hz.n + ' comprobantes (enviados solos, en segundo plano)', pendientes === 0 && comprobantesRecibidos === hz.n && !sim.errores.length,
     hz.estados + (sim.errores.length ? ' · ' + sim.errores[0] : ''));
+  await js(`go('compras'); true`); await esperar(400);
+  await js(`(async () => { const l = await BESALU.compras.listar({}); await verCompra(l[0].id); })(); true`); await esperar(400);
+  const secMr = await js("({ pill: __modal().querySelector('.hseccion .pill').textContent, botones: [...__modal().querySelectorAll('.hseccion button')].map(b => b.textContent), lista: document.querySelector('#v-compras tbody tr td:last-child').textContent })");
+  const recibidoMr = sim.recibidos.find((r) => r.mensajeReceptor);
+  verificar('Hacienda aceptó el Mensaje Receptor: la compra muestra "Factura aceptada" y su XML',
+    recibidoMr && recibidoMr.claveFactura === '50614102600310199999900100001010000004521112345678' && secMr.pill === 'Factura aceptada' && secMr.lista === 'Factura aceptada' &&
+    secMr.botones.includes('XML del mensaje') && secMr.botones.includes('Respuesta de Hacienda'), secMr.botones.join(' · '));
+  await js('while (hayModal()) cerrarModal(); true');
   await js(`go('ventas'); true`); await esperar(500);
   await js(`(async () => { const l = await BESALU.ventas.listar({}); await verComprobante(l.find(c => c.tipo === '01').id); })(); true`); await esperar(500);
   const sec = await js("({ texto: __modal().querySelector('.hseccion').textContent, botones: [...__modal().querySelectorAll('.hseccion button')].map(b => b.textContent) })");

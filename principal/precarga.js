@@ -37,7 +37,9 @@ contextBridge.exposeInMainWorld('BESALU', {
   },
   compras: {
     registrar: c('compras:registrar'), listar: c('compras:listar'), obtener: c('compras:obtener'),
-    anular: c('compras:anular'), proveedores: c('proveedores:listar')
+    anular: c('compras:anular'), proveedores: c('proveedores:listar'),
+    datosMensaje: c('compras:datosMensaje'), responder: c('compras:responder'),
+    reintentarMensaje: c('compras:reintentarMensaje'), guardarXmlMensaje: c('compras:guardarXmlMensaje')
   },
   caja: {
     actual: c('caja:actual'), abrir: c('caja:abrir'), resumen: c('caja:resumen'),

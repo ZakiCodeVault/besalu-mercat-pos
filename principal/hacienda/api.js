@@ -3,8 +3,9 @@
  *
  *   IdP (OpenID Connect, "Resource Owner Password"): usuario y contraseña de la
  *   API → access_token (se renueva solo con el refresh_token).
- *   POST /recepcion        envía el comprobante firmado (201 = recibido)
+ *   POST /recepcion        envía el comprobante (o el Mensaje Receptor) firmado (201 = recibido)
  *   GET  /recepcion/{clave} estado: recibido · procesando · aceptado · rechazado · error
+ *                          (Mensaje Receptor: /recepcion/{clave}-{consecutivoReceptor})
  *
  * Los errores se clasifican para que la cola sepa si conviene reintentar:
  *   red · servidor · limite → se reintenta solo
@@ -98,16 +99,19 @@ class ClienteHacienda {
   }
 
   /**
-   * Envía un comprobante firmado.
+   * Envía un comprobante firmado, o un Mensaje Receptor: en ese caso la clave y
+   * el emisor son los de la factura del proveedor, el receptor es el negocio y
+   * va el consecutivo del mensaje (consecutivoReceptor).
    * @returns {Promise<{estado:'recibido'|'ya_recibido'}>}
    */
-  async enviar({ clave, fecha, emisor, receptor, xmlFirmado }) {
+  async enviar({ clave, fecha, emisor, receptor, consecutivoReceptor, xmlFirmado }) {
     const cuerpo = {
       clave, fecha,
       emisor: { tipoIdentificacion: emisor.tipo, numeroIdentificacion: emisor.numero },
       comprobanteXml: Buffer.from(xmlFirmado, 'utf8').toString('base64')
     };
     if (receptor && receptor.numero) cuerpo.receptor = { tipoIdentificacion: receptor.tipo, numeroIdentificacion: receptor.numero };
+    if (consecutivoReceptor) cuerpo.consecutivoReceptor = consecutivoReceptor;
     const r = await this.api('POST', '', cuerpo);
     if (r.status === 201 || r.status === 202 || r.status === 200) return { estado: 'recibido' };
     const causa = r.headers.get('x-error-cause') || (await r.text().catch(() => '')) || ('HTTP ' + r.status);
@@ -116,7 +120,7 @@ class ClienteHacienda {
   }
 
   /**
-   * Estado de un comprobante enviado.
+   * Estado de un comprobante enviado (de un Mensaje Receptor: "clave-consecutivoReceptor").
    * @returns {Promise<{estado:string, xmlRespuesta:string|null}>}
    */
   async consultar(clave) {
