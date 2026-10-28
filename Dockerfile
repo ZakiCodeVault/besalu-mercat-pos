@@ -6,8 +6,8 @@ FROM electronuserland/builder:wine
 WORKDIR /app
 
 # 1) Dependencias primero (capa cacheable; se reusa si no cambia package.json)
-COPY package.json package-lock.json* ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts   # versiones exactas del lockfile, sin scripts de terceros
 
 # 2) Codigo de la app
 COPY . .

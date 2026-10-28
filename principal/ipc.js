@@ -11,6 +11,7 @@ const log = require('electron-log');
 const datos = require('./datos');
 const exportar = require('./exportar');
 const hacienda = require('./hacienda/conector');
+const seguridad = require('./seguridad');
 const correo = require('./hacienda/correo');
 
 function amigable(e) {
@@ -26,7 +27,8 @@ function amigable(e) {
 }
 
 function manejar(canal, fn) {
-  ipcMain.handle(canal, async (_e, ...args) => {
+  ipcMain.handle(canal, async (e, ...args) => {
+    if (!seguridad.remitenteValido(e)) { log.warn('[ipc] pedido rechazado de ' + ((e.senderFrame && e.senderFrame.url) || 'origen desconocido')); return { ok: false, error: 'Origen no autorizado' }; }
     try { return { ok: true, valor: await fn(...args) }; }
     catch (e) { log.error('[' + canal + ']', e); return { ok: false, error: amigable(e) }; }
   });

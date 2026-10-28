@@ -51,10 +51,11 @@ El workflow `.github/workflows/release.yml` compila el `.exe` de forma nativa en
 
 ## Notas
 
-- **Desde la v2** la base usa `better-sqlite3`, un modulo nativo. electron-builder
-  descarga el binario ya compilado para Windows (prebuilt). Si no lo encuentra,
-  no puede compilarlo desde Linux: en ese caso usar GitHub Actions, que es el
-  camino oficial y probado.
+- La base usa `better-sqlite3`, un modulo nativo. Desde la v2.2 (better-sqlite3
+  13) el paquete ya trae el binario compilado para Windows, asi que no hace falta
+  compilar nada desde Linux. El camino oficial y probado sigue siendo GitHub
+  Actions, que ademas corre las pruebas en Windows antes de compilar.
+- Los comandos se corren desde la carpeta `windows-app/` (donde esta el `Dockerfile`).
 
 - `npm run dist` descarga Electron y utilidades la primera vez: el contenedor
   necesita **internet**.

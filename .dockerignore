@@ -1,5 +1,16 @@
 node_modules
 dist
+out
 *.log
 .DS_Store
 .git
+
+# Nunca dentro de la imagen: datos y secretos
+*.sqlite
+*.db
+*.p12
+*.pfx
+*.pem
+*.key
+.env
+.env.*

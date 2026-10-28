@@ -27,7 +27,7 @@ function ventas(desde, hasta) {
   const filas = [['Tipo', 'Consecutivo', 'Clave', 'Fecha', 'Cliente', 'Identificación', 'Medio de pago',
     'Base 13%', 'IVA 13%', 'Base 4%', 'IVA 4%', 'Base 2%', 'IVA 2%', 'Base 1%', 'IVA 1%', 'Exento',
     'Total sin IVA', 'Total IVA', 'Total', 'Referencia', 'Estado Hacienda', 'Reemplazado por', 'Cuenta en reportes']];
-  const comprobantes = d.prepare(`SELECT * FROM comprobantes WHERE substr(fecha_emision,1,10) BETWEEN ? AND ? ORDER BY id`).all(desde, hasta);
+  const comprobantes = d.prepare(`SELECT * FROM comprobantes WHERE fecha_emision BETWEEN ? AND (? || 'T99') ORDER BY id`).all(desde, hasta);
   const porTarifa = d.prepare('SELECT tarifa_iva AS t, sum(subtotal) AS b, sum(impuesto) AS i FROM comprobante_lineas WHERE comprobante_id = ? GROUP BY tarifa_iva');
   for (const c of comprobantes) {
     const signo = c.tipo === '03' ? -1 : 1;

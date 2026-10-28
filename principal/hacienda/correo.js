@@ -18,7 +18,6 @@
  *    comprobante no se tocan.
  *  - Tiene su propio turno: un servidor de correo lento no frena el envío a Hacienda.
  */
-const nodemailer = require('nodemailer');
 const { obtener, leerConfig, escribirConfig, leerAjustes, registrar } = require('../datos/conexion');
 const ventas = require('../datos/ventas');
 const { fechaLocal } = require('../datos/montos');
@@ -128,7 +127,7 @@ function crearTransporte() {
   const c = leer();
   const huella = c.actualizado;
   if (transporte && transporte.huella === huella) return transporte.t;
-  const t = nodemailer.createTransport(Object.assign({
+  const t = require('nodemailer').createTransport(Object.assign({   // se carga solo al enviar correo
     host: c.servidor, port: c.puerto,
     secure: c.seguridad === 'ssl', requireTLS: c.seguridad === 'starttls',
     auth: { user: c.usuario, pass: contrasena() },

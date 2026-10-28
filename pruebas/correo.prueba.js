@@ -17,9 +17,9 @@ const datos = require('../principal/datos');
 const conector = require('../principal/hacienda/conector');
 const correo = require('../principal/hacienda/correo');
 const pdf = require('../principal/hacienda/pdf');
-const { generarLlavePrueba } = require('./llave-prueba');
-const { crearSimulador, firmaValida } = require('./hacienda-simulada');
-const { crearSmtp, certificadoLocal } = require('./smtp-simulado');
+const { generarLlavePrueba } = require('./apoyo/llave-prueba');
+const { crearSimulador, firmaValida } = require('./apoyo/hacienda-simulada');
+const { crearSmtp, certificadoLocal } = require('./apoyo/smtp-simulado');
 
 const { conexion, productos, ventas, caja, respaldos } = datos;
 

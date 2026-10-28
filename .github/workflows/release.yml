@@ -1,34 +1,52 @@
 name: Release
 
-# Se dispara al empujar un tag de version, p. ej.  v1.0.0
+# Se dispara al empujar un tag de versión, p. ej.  v2.2.0
 on:
   push:
     tags:
       - 'v*'
 
+# Por defecto, solo lectura; el paso que publica pide permiso de escritura
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write   # crear el Release y subir el instalador
     steps:
+      # Acciones fijadas a un commit exacto: si alguien movera la etiqueta, no cambia lo que corre
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1   # v7.1.0
         with:
           node-version: 22
 
+      # Sin scripts de instalación de terceros (reduce el riesgo de paquetes comprometidos)
       - name: Instalar dependencias
-        run: npm ci
+        run: npm ci --ignore-scripts
+
+      - name: Revisar vulnerabilidades conocidas
+        run: npm audit --omit=dev --audit-level=high
+
+      # Las pruebas corren en Windows de verdad antes de compilar: si algo falla, no se publica
+      - name: Pruebas (datos, Hacienda, correo y app)
+        run: npm run prueba
 
       - name: Compilar y publicar el instalador
         env:
-          # Token automatico del repo (permite crear el Release).
+          # Token automático del repo (permite crear el Release).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Firma de codigo (opcional): cuando agregues estos secrets, firma solo.
+          # Firma de código (opcional): cuando agregues estos secrets, firma solo.
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: npm run dist -- --publish always

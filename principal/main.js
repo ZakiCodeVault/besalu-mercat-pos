@@ -7,16 +7,18 @@
  *   3. Abre la ventana del POS.
  *   4. Hace el respaldo diario y busca actualizaciones.
  */
-const { app, BrowserWindow, Menu, shell, ipcMain, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const log = require('electron-log');
 const { autoUpdater } = require('electron-updater');
 const datos = require('./datos');
 const ipc = require('./ipc');
+const seguridad = require('./seguridad');
 const hacienda = require('./hacienda/conector');
 
 log.transports.file.level = 'info';
+log.hooks.push(seguridad.filtroRegistro);   // nunca escribir tokens ni contraseñas en el registro
 autoUpdater.logger = log;
 autoUpdater.autoDownload = true;          // descarga en segundo plano
 autoUpdater.autoInstallOnAppQuit = true;  // instala al cerrar si no reinician antes
@@ -99,34 +101,35 @@ function crearVentana() {
   ventana = new BrowserWindow({
     width: 1280, height: 820, minWidth: 1024, minHeight: 680,
     backgroundColor: '#eef1f6', title: 'Besalu Mercat POS', show: false, autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'precarga.js'),
-      contextIsolation: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false
-    }
+    webPreferences: seguridad.preferenciasVentana(path.join(__dirname, 'precarga.js'))
   });
   Menu.setApplicationMenu(null);   // sin menú: las teclas F llegan a la caja
   ventana.loadFile(path.join(__dirname, '..', 'interfaz', 'index.html'));
   ventana.once('ready-to-show', () => { ventana.maximize(); ventana.show(); });
-  ventana.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
 }
 
 /* ---------------- Impresión y actualizaciones ---------------- */
 function configurarSistema() {
-  ipcMain.handle('app:version', () => require('../package.json').version);
+  // Solo la pantalla del POS puede usar estos canales
+  const manejar = (canal, fn) => ipcMain.handle(canal, (e, ...a) => (seguridad.remitenteValido(e) ? fn(...a) : null));
+  manejar('app:version', () => require('../package.json').version);
 
   // Imprime el ticket (#zona-impresion) en la impresora predeterminada, sin diálogo.
-  ipcMain.handle('imprimir', () => new Promise((resolver) => {
+  manejar('imprimir', () => new Promise((resolver) => {
     if (!ventana) return resolver({ ok: false, motivo: 'Sin ventana' });
     ventana.webContents.print({ silent: true, printBackground: true, margins: { marginType: 'none' } },
       (ok, motivo) => { if (!ok) log.warn('[impresion]', motivo); resolver({ ok, motivo: motivo || '' }); });
   }));
 
-  ipcMain.handle('actualizaciones:buscar', async () => {
+  manejar('actualizaciones:buscar', async () => {
     if (!app.isPackaged) return { state: 'dev' };
     try { await autoUpdater.checkForUpdates(); return { state: 'checked' }; }
     catch (e) { log.error('[updater] buscar', e); return { state: 'error', message: String((e && e.message) || e) }; }
   });
-  ipcMain.on('actualizaciones:instalar', () => { try { autoUpdater.quitAndInstall(); } catch (e) { log.error('[updater]', e); } });
+  ipcMain.on('actualizaciones:instalar', (e) => {
+    if (!seguridad.remitenteValido(e)) return;
+    try { autoUpdater.quitAndInstall(); } catch (err) { log.error('[updater]', err); }
+  });
 
   if (!app.isPackaged) return;
   autoUpdater.on('update-available', (i) => enviar('actualizacion', { state: 'available', version: i && i.version }));
@@ -140,12 +143,14 @@ function configurarSistema() {
 }
 
 /* ---------------- Ciclo de vida ---------------- */
+seguridad.antesDeIniciar();
 if (!app.requestSingleInstanceLock()) {
   app.quit();   // ya hay una caja abierta: no abrir dos copias sobre la misma base
 } else {
   app.on('second-instance', () => { if (ventana) { if (ventana.isMinimized()) ventana.restore(); ventana.focus(); } });
 
   app.whenReady().then(() => {
+    seguridad.alIniciar();
     const carpeta = app.getPath('userData');
     try { abrirBase(carpeta); } catch (e) { app.exit(1); return; }
     ipc.registrar({ ventana: () => ventana, estadoInicio, carpetaDatos: carpeta });

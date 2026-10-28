@@ -40,7 +40,8 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 13. [Publicar una versión nueva](#publicar-una-versión-nueva)
 14. [Rendimiento](#rendimiento)
 15. [Atajos de teclado](#atajos-de-teclado)
-16. [Pendientes](#pendientes)
+16. [Seguridad](#seguridad)
+17. [Pendientes](#pendientes)
 
 ---
 
@@ -118,6 +119,8 @@ besalu-mercat-pos/
 ├── principal/                  ← El sistema (proceso principal de Electron)
 │   ├── main.js                 ← Abre la ventana y la base, imprime, respaldo diario,
 │   │                             actualizaciones.
+│   ├── seguridad.js            ← Sandbox, origen del IPC, navegación, permisos y
+│   │                             filtro de secretos en el registro.
 │   ├── ipc.js                  ← Las operaciones que la interfaz puede pedir.
 │   ├── precarga.js             ← Puente seguro: expone window.BESALU a la interfaz.
 │   ├── exportar.js             ← Archivos CSV para Excel.
@@ -165,13 +168,17 @@ besalu-mercat-pos/
 │   ├── hacienda.prueba.js      ← XML, firma, envío, rechazos, Mensaje Receptor, sin internet,
 │   │                             producción.
 │   ├── correo.prueba.js        ← Factura al correo: adjuntos, PDF, reintentos, TLS.
-│   ├── prueba-completa.js      ← La app real de punta a punta.
-│   ├── hacienda-simulada.js    ← Servidor que imita a Hacienda (verifica firma y XSD).
-│   ├── smtp-simulado.js        ← Servidor de correo local (plano, SSL/TLS y STARTTLS).
-│   ├── llave-prueba.js         ← Genera una llave .p12 falsa para probar.
-│   └── esquemas/               ← XSD oficiales v4.4 de Hacienda (incluye MensajeReceptor).
-├── .github/workflows/release.yml ← Compila el .exe en GitHub y publica el Release.
-├── package.json · GUIA-VERSIONES.md · DOCKER.md · README.md
+│   ├── app.prueba.js           ← La app real de punta a punta (incluye la seguridad de la pantalla).
+│   └── apoyo/                  ← Lo que usan las pruebas (nada de esto va en el instalador)
+│       ├── hacienda-simulada.js ← Servidor que imita a Hacienda (verifica firma y XSD).
+│       ├── smtp-simulado.js    ← Servidor de correo local (plano, SSL/TLS y STARTTLS).
+│       ├── llave-prueba.js     ← Genera una llave .p12 falsa para probar.
+│       └── esquemas/           ← XSD oficiales v4.4 de Hacienda (incluye MensajeReceptor).
+├── docs/
+│   ├── GUIA-VERSIONES.md       ← Publicar versiones, actualizaciones y firma de código.
+│   └── DOCKER.md               ← Compilar el .exe con Docker (alternativa).
+├── .github/workflows/release.yml ← Prueba en Windows, compila el .exe y publica el Release.
+├── Dockerfile · package.json · README.md
 ```
 
 ---
@@ -470,23 +477,18 @@ Después: **Guardar correo** y **Enviar correo de prueba** (llega al correo de
 
 ## Trabajar en el código
 
-Requisitos: **Node.js 20 o 22** (la base usa `better-sqlite3`, un módulo nativo
-que se compila para Electron).
+Requisitos: **Node.js 22 o más nuevo**. Usa **Electron 44** y `better-sqlite3`
+13, que ya trae el módulo nativo compilado para Windows, macOS y Linux (no hace
+falta compilar nada).
 
 ```bash
-npm install          # instala dependencias y compila better-sqlite3 para Electron
-npm run iniciar      # abre la app en modo desarrollo
-npm run prueba       # corre todas las pruebas
-npm run dist         # genera el instalador (en Windows)
+npm install --ignore-scripts   # dependencias (sin scripts de terceros)
+npm run iniciar                # abre la app en modo desarrollo
+npm run prueba                 # corre todas las pruebas
+npm run dist                   # genera el instalador (en Windows)
 ```
 
-Si `npm install` falla al compilar `better-sqlite3` (por ejemplo con una versión
-de Node muy nueva):
-
-```bash
-npm install --ignore-scripts
-npx @electron/rebuild -v 33.4.11 -w better-sqlite3
-```
+La primera vez que se ejecuta Electron descarga su programa (~100 MB).
 
 En modo desarrollo los datos se guardan en la carpeta de usuario del sistema
 donde se esté trabajando, y no se buscan actualizaciones.
@@ -496,11 +498,11 @@ donde se esté trabajando, y no se buscan actualizaciones.
 ## Pruebas
 
 ```bash
-npm run prueba            # las cuatro juntas
+npm run prueba            # las cuatro juntas (158 pruebas)
 npm run prueba:datos      # 39 pruebas de reglas fiscales y protecciones
 npm run prueba:hacienda   # 50 pruebas de la conexión con Hacienda
 npm run prueba:correo     # 25 pruebas del envío de facturas por correo
-npm run prueba:app        # pruebas con la app real, de punta a punta
+npm run prueba:app        # 44 pruebas con la app real, de punta a punta
 ```
 
 Todas usan una carpeta temporal y **no tocan** los datos del negocio. Las de
@@ -552,17 +554,22 @@ imprimir solo sale el comprobante, factura a un cliente por SINPE, emite una
 nota de crédito, revisa el IVA y el balance en Reportes, cierra caja con Z,
 comprueba que Hacienda aceptó todo (también el Mensaje Receptor) y que la factura
 llegó sola al correo del cliente (y que **Reenviar por correo** funciona), respalda, **reinicia la app** y comprueba
-que todo quedó guardado e íntegro.
+que todo quedó guardado e íntegro. También verifica la seguridad de la pantalla:
+sin Node, sin ventanas nuevas, sin conexión a internet, sin navegar a otra página
+y que el sistema solo atiende pedidos de la pantalla del POS.
+
+Las mismas pruebas corren en **Windows** (GitHub Actions) antes de compilar cada
+versión: si alguna falla, no se publica.
 
 ---
 
 ## Publicar una versión nueva
 
-Resumen (detalle en **[GUIA-VERSIONES.md](GUIA-VERSIONES.md)**):
+Resumen (detalle en **[docs/GUIA-VERSIONES.md](docs/GUIA-VERSIONES.md)**):
 
 ```bash
-npm version patch          # 2.1.0 → 2.1.1 (crea commit y tag)
-git push --follow-tags     # GitHub compila el .exe y crea el Release (borrador)
+npm version patch          # 2.2.0 → 2.2.1 (crea commit y tag)
+git push --follow-tags     # GitHub prueba, compila el .exe y crea el Release (borrador)
 ```
 
 Luego en GitHub → **Releases** → abrir el borrador → **Publish release**.
@@ -597,6 +604,41 @@ Medido con las pruebas:
 
 ---
 
+## Seguridad
+
+**Datos y secretos**
+- Contraseñas de Hacienda y del correo, llave `.p12` y PIN: **cifrados con la
+  cuenta de Windows** (DPAPI). En la base solo hay texto cifrado; la pantalla
+  solo sabe si están guardados, nunca su valor.
+- Nada de eso va a la bitácora, y el registro de errores **tapa** cualquier
+  token, contraseña, PIN o llave privada antes de escribirse.
+- El repositorio no contiene llaves ni contraseñas (revisado en todo el
+  historial). El `.gitignore` impide subir bases de datos, `.p12`, `.pem`,
+  `.env` y similares. La firma de código va como secretos de GitHub.
+
+**La aplicación**
+- **Electron 44** (con parches de seguridad vigentes). Pantalla en **sandbox**,
+  sin Node y con aislamiento de contexto.
+- El sistema **solo atiende pedidos de la pantalla del POS**: cualquier otro
+  origen que intente usar el IPC se rechaza y queda en el registro.
+- La pantalla **no puede conectarse a internet**, navegar a otra página, abrir
+  ventanas ni pedir permisos (cámara, ubicación…); todo pasa por el sistema.
+  Política de contenido (CSP) estricta.
+- En la app instalada no hay herramientas de desarrollador, y el ejecutable
+  tiene apagadas las funciones peligrosas (*fuses*): no se puede usar como
+  `node`, no acepta código por variables de entorno ni depuración, y solo carga
+  su propio paquete, **verificado por integridad** al abrir.
+- Hacienda, el correo y las actualizaciones usan HTTPS/TLS con verificación de
+  certificado.
+
+**La compilación**
+- GitHub Actions instala sin scripts de terceros, revisa vulnerabilidades
+  conocidas (`npm audit`) y corre las pruebas en Windows antes de compilar.
+- Las acciones están fijadas a un commit exacto y el permiso de escritura solo
+  lo tiene el paso que publica.
+
+---
+
 ## Pendientes
 
 - **Primera prueba con el sandbox real de Hacienda** usando las credenciales
@@ -605,5 +647,6 @@ Medido con las pruebas:
 - **Primer envío real de correo** con el SMTP del dominio del negocio (Ajustes →
   Enviar correo de prueba) y revisar que no caiga en spam (SPF/DKIM).
 - **Notas de crédito al correo del cliente**: hoy solo se envían las facturas.
-- **Firma de código** (quita el aviso "Editor desconocido"): ver GUIA-VERSIONES.md.
+- **Firma de código** (quita el aviso "Editor desconocido" y permite que Windows
+  verifique cada actualización): ver [docs/GUIA-VERSIONES.md](docs/GUIA-VERSIONES.md).
 - **Logo real** del negocio para el ícono y el instalador (`recursos/`).

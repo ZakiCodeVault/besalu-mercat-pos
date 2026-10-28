@@ -1,5 +1,5 @@
 /**
- * prueba-completa.js — Prueba de punta a punta con la app REAL (interfaz + base).
+ * app.prueba.js — Prueba de punta a punta con la app REAL (interfaz + base).
  *
  * Usa una carpeta de datos temporal (no toca los datos del negocio) y recorre el
  * día de trabajo: configurar negocio → conectar Hacienda → producto → compra desde
@@ -17,9 +17,9 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
-const { generarLlavePrueba } = require('./llave-prueba');
-const { crearSimulador } = require('./hacienda-simulada');
-const { crearSmtp } = require('./smtp-simulado');
+const { generarLlavePrueba } = require('./apoyo/llave-prueba');
+const { crearSimulador } = require('./apoyo/hacienda-simulada');
+const { crearSmtp } = require('./apoyo/smtp-simulado');
 
 const carpeta = fs.mkdtempSync(path.join(os.tmpdir(), 'besalu-app-'));
 app.setPath('userData', carpeta);
@@ -101,7 +101,15 @@ const hoy = () => js("periodo('mes')");
 
 async function correr() {
   for (let i = 0; i < 100 && !(ventana = BrowserWindow.getAllWindows()[0]); i++) await esperar(100);
-  ventana.webContents.on('console-message', (_e, nivel, mensaje) => { if (nivel >= 3) erroresConsola.push(mensaje); });
+  // Electron 35+: los datos vienen en el evento (level: 'error'); antes, como argumentos
+  ventana.webContents.on('console-message', (e, nivel, mensaje) => {
+    const esError = e && e.level !== undefined ? e.level === 'error' : nivel >= 3;
+    if (esError) erroresConsola.push((e && e.message) || mensaje);
+  });
+  await ventana.webContents.executeJavaScript("console.error('__control__'); true");   // la escucha sí detecta errores
+  await esperar(100);
+  verificar('La escucha de errores de consola funciona', erroresConsola.includes('__control__'));
+  erroresConsola.length = 0;
   console.log('\nPrueba completa (app real) · datos temporales en ' + carpeta + '\n');
 
   const t0 = Date.now();
@@ -312,6 +320,23 @@ async function correr() {
   verificar('Reabre y todo persiste (3 comprobantes, 1 compra, 2 productos)', r1.ok && persist.comp === 3 && persist.compras === 1 && persist.prods === 2 && !persist.turno && persist.cedula === '3101123456', r1.ms + ' ms');
   verificar('Integridad verificada (archivo, kárdex, consecutivos)', persist.integ);
   verificar('La interfaz no tiene acceso directo a la base (solo operaciones permitidas)', await js("typeof BESALU.sql === 'undefined' && typeof require === 'undefined' && !('exec' in BESALU)"));
+
+  // ---- Seguridad de la pantalla ----
+  const aislada = await js("({ process: typeof process, buffer: typeof Buffer, global: typeof global, abrir: window.open('https://example.com') === null })");
+  verificar('Pantalla en sandbox: sin Node (process, Buffer) y sin ventanas nuevas', aislada.process === 'undefined' && aislada.buffer === 'undefined' && aislada.global === 'undefined' && aislada.abrir);
+  const red = await js("(async () => { try { await fetch('https://example.com'); return 'llegó'; } catch (e) { return 'bloqueado'; } })()");
+  verificar('La pantalla no puede conectarse a internet (todo pasa por el sistema)', red === 'bloqueado', red);
+  await esperar(200);
+  // El bloqueo deja su aviso en la consola: es el resultado esperado, no un error de la app
+  for (let i = erroresConsola.length - 1; i >= 0; i--) if (/example\.com/.test(erroresConsola[i])) erroresConsola.splice(i, 1);
+  const antes = ventana.webContents.getURL();
+  await js("location.href = 'https://example.com'; true").catch(() => {});
+  await esperar(400);
+  verificar('La pantalla no puede navegar a otra página', ventana.webContents.getURL() === antes);
+  const seguridad = require('../principal/seguridad');
+  const falso = (url, parent = null) => ({ senderFrame: { url, parent } });
+  verificar('El sistema solo atiende pedidos de la pantalla del POS', seguridad.remitenteValido(falso(seguridad.PANTALLA + '#x')) &&
+    !seguridad.remitenteValido(falso('https://example.com/')) && !seguridad.remitenteValido(falso(seguridad.PANTALLA, {})) && !seguridad.remitenteValido({}));
 
   // ---- Velocidad con muchas ventas (sin envío a Hacienda) ----
   await js(`(async () => { const h = App.hacienda; await BESALU.hacienda.guardar({ activo: false, ambiente: h.ambiente, usuario: h.usuario }); })(); true`); await esperar(300);

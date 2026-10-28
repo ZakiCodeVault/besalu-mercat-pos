@@ -1,4 +1,27 @@
+# Dependencias y compilaciones (se regeneran)
 node_modules/
 dist/
+out/
 *.log
 .DS_Store
+Thumbs.db
+
+# Datos del negocio: nunca al repositorio
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+respaldos/
+
+# Llaves, certificados y secretos: nunca al repositorio
+# (la firma de código va como secretos de GitHub: CSC_LINK / CSC_KEY_PASSWORD)
+*.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
+.env
+.env.*
+*.secret
+credenciales*.json

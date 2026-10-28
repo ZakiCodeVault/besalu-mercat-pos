@@ -259,8 +259,8 @@ function obtenerPorId(id) {
 /** Lista de comprobantes con filtros (más recientes primero). */
 function listar({ desde, hasta, texto, tipo, limite = 300 } = {}) {
   const cond = [], par = {};
-  if (desde) { cond.push('substr(c.fecha_emision, 1, 10) >= @desde'); par.desde = desde; }
-  if (hasta) { cond.push('substr(c.fecha_emision, 1, 10) <= @hasta'); par.hasta = hasta; }
+  if (desde) { cond.push('c.fecha_emision >= @desde'); par.desde = desde; }
+  if (hasta) { cond.push("c.fecha_emision <= @hasta || 'T99'"); par.hasta = hasta; }   // usa el índice de fecha
   if (tipo) { cond.push('c.tipo = @tipo'); par.tipo = tipo; }
   if (texto) { cond.push('(c.consecutivo LIKE @t OR c.receptor_nombre LIKE @t OR c.receptor_identificacion LIKE @t)'); par.t = '%' + texto + '%'; }
   par.limite = limite;

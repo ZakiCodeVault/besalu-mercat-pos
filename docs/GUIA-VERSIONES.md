@@ -1,8 +1,10 @@
 # Publicar una version y actualizaciones automaticas
 
 La app esta en GitHub: **ZakiCodeVault/besalu-mercat-pos** (repo publico).
-Cada vez que empujas un **tag `v*`**, GitHub Actions compila el instalador en
-`windows-latest` y crea un **Release** con el `.exe` final. Las copias ya
+Cada vez que empujas un **tag `v*`**, GitHub Actions (en `windows-latest`)
+instala las dependencias sin scripts de terceros, revisa vulnerabilidades
+conocidas, **corre todas las pruebas en Windows** y, si todo pasa, compila el
+instalador y crea un **Release** con el `.exe` final. Las copias ya
 instaladas en las cajas se actualizan solas (electron-updater).
 
 ## Sacar una nueva version
@@ -11,8 +13,8 @@ Desde la carpeta `windows-app/`:
 
 ```bash
 # 1) subir el numero de version (crea el commit y el tag vX.Y.Z)
-npm run prueba           # antes de publicar: datos, Hacienda y app deben pasar
-npm version patch        # 2.1.0 -> 2.1.1   (usa "minor" o "major" si aplica)
+npm run prueba           # antes de publicar: datos, Hacienda, correo y app deben pasar
+npm version patch        # 2.2.0 -> 2.2.1   (usa "minor" o "major" si aplica)
 
 # 2) empujar codigo + tag  -> dispara la compilacion
 git push --follow-tags

@@ -15,6 +15,8 @@ const { obtener, leerAjustes } = require('./conexion');
 const { motivoNoAceptable } = require('../hacienda/receptor');
 
 const fechaComp = 'substr(c.fecha_emision, 1, 10)';
+// Los filtros comparan la fecha completa (no substr) para que SQLite use el índice:
+// '2026-10-31T99' queda después de cualquier hora de ese día.
 // Un comprobante rechazado que ya se reemplazó no cuenta: cuenta su reemplazo
 const vigente = 'NOT EXISTS (SELECT 1 FROM comprobantes s WHERE s.sustituye_id = c.id)';
 
@@ -27,7 +29,7 @@ function iva(desde, hasta) {
   for (const r of d.prepare(`
       SELECT l.tarifa_iva AS t, c.tipo, sum(l.subtotal) AS base, sum(l.impuesto) AS imp
       FROM comprobante_lineas l JOIN comprobantes c ON c.id = l.comprobante_id
-      WHERE ${fechaComp} BETWEEN ? AND ? AND ${vigente} GROUP BY l.tarifa_iva, c.tipo`).all(desde, hasta)) {
+      WHERE c.fecha_emision BETWEEN ? AND (? || 'T99') AND ${vigente} GROUP BY l.tarifa_iva, c.tipo`).all(desde, hasta)) {
     const f = fila(r.t);
     if (r.tipo === '03') { f.nc_base += r.base; f.nc_iva += r.imp; } else { f.ventas_base += r.base; f.ventas_iva += r.imp; }
   }
@@ -74,13 +76,13 @@ function balance(desde, hasta) {
       sum(CASE WHEN c.tipo IN ('01','04') THEN l.subtotal ELSE -l.subtotal END) AS ventas_netas,
       sum(CASE WHEN c.tipo IN ('01','04') THEN round(l.cantidad * l.costo_unitario) ELSE -round(l.cantidad * l.costo_unitario) END) AS costo_ventas
     FROM comprobante_lineas l JOIN comprobantes c ON c.id = l.comprobante_id
-    WHERE ${fechaComp} BETWEEN ? AND ? AND ${vigente}`).get(desde, hasta);
+    WHERE c.fecha_emision BETWEEN ? AND (? || 'T99') AND ${vigente}`).get(desde, hasta);
   const compras = d.prepare(`
     SELECT count(*) AS facturas, coalesce(sum(subtotal), 0) AS base, coalesce(sum(impuesto), 0) AS iva, coalesce(sum(total), 0) AS total
     FROM compras WHERE estado = 'vigente' AND fecha BETWEEN ? AND ?`).get(desde, hasta);
   const movs = d.prepare(`
     SELECT tipo, round(sum(cantidad), 3) AS unidades, count(*) AS registros
-    FROM movimientos WHERE substr(fecha, 1, 10) BETWEEN ? AND ? GROUP BY tipo`).all(desde, hasta);
+    FROM movimientos WHERE fecha BETWEEN ? AND (? || ' 99') GROUP BY tipo`).all(desde, hasta);
   const unidades = {};
   for (const m of movs) unidades[m.tipo] = m.unidades;
   const entradas = (unidades.compra || 0) + (unidades.nota_credito || 0) + (unidades.inicial || 0) + Math.max(0, unidades.ajuste || 0);
@@ -105,11 +107,11 @@ function resumenVentas(desde, hasta) {
       coalesce(sum(CASE WHEN c.tipo IN ('01','04') THEN c.total_comprobante ELSE -c.total_comprobante END), 0) AS total,
       coalesce(sum(CASE WHEN c.tipo IN ('01','04') THEN 1 ELSE 0 END), 0) AS cantidad,
       coalesce(sum(CASE WHEN c.tipo = '03' THEN c.total_comprobante ELSE 0 END), 0) AS devoluciones
-    FROM comprobantes c WHERE ${fechaComp} BETWEEN ? AND ? AND ${vigente}`).get(desde, hasta);
+    FROM comprobantes c WHERE c.fecha_emision BETWEEN ? AND (? || 'T99') AND ${vigente}`).get(desde, hasta);
   const medios = { efectivo: 0, tarjeta: 0, sinpe: 0, transferencia: 0, otro: 0 };
   for (const m of d.prepare(`
       SELECT medio_pago, sum(CASE WHEN tipo IN ('01','04') THEN total_comprobante ELSE -total_comprobante END) AS total
-      FROM comprobantes c WHERE ${fechaComp} BETWEEN ? AND ? AND ${vigente} GROUP BY medio_pago`).all(desde, hasta)) medios[m.medio_pago] = m.total;
+      FROM comprobantes c WHERE c.fecha_emision BETWEEN ? AND (? || 'T99') AND ${vigente} GROUP BY medio_pago`).all(desde, hasta)) medios[m.medio_pago] = m.total;
   return { desde, hasta, total: r.total, cantidad: r.cantidad, devoluciones: r.devoluciones,
            ticket_promedio: r.cantidad ? Math.round(r.total / r.cantidad) : 0, medios };
 }
@@ -119,7 +121,7 @@ function ventasPorDia(desde, hasta) {
   return obtener().prepare(`
     SELECT ${fechaComp} AS dia,
            sum(CASE WHEN c.tipo IN ('01','04') THEN c.total_comprobante ELSE -c.total_comprobante END) AS total
-    FROM comprobantes c WHERE ${fechaComp} BETWEEN ? AND ? AND ${vigente} GROUP BY dia ORDER BY dia`).all(desde, hasta);
+    FROM comprobantes c WHERE c.fecha_emision BETWEEN ? AND (? || 'T99') AND ${vigente} GROUP BY dia ORDER BY dia`).all(desde, hasta);
 }
 
 function masVendidos(desde, hasta, limite = 8) {
@@ -128,7 +130,7 @@ function masVendidos(desde, hasta, limite = 8) {
            round(sum(CASE WHEN c.tipo = '03' THEN -l.cantidad ELSE l.cantidad END), 3) AS cantidad,
            sum(CASE WHEN c.tipo = '03' THEN -l.total_linea ELSE l.total_linea END) AS total
     FROM comprobante_lineas l JOIN comprobantes c ON c.id = l.comprobante_id
-    WHERE ${fechaComp} BETWEEN ? AND ? AND ${vigente} GROUP BY l.producto_id, l.descripcion
+    WHERE c.fecha_emision BETWEEN ? AND (? || 'T99') AND ${vigente} GROUP BY l.producto_id, l.descripcion
     HAVING cantidad > 0 ORDER BY total DESC LIMIT ?`).all(desde, hasta, limite);
 }
 

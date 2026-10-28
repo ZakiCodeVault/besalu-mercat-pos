@@ -1,7 +1,7 @@
 {
   "name": "besalu-mercat-pos",
   "productName": "Besalu Mercat POS",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Sistema de facturación y punto de venta de Besalú Mercat (local, Windows, SQLite)",
   "author": "Besalu Mercat",
   "license": "UNLICENSED",
@@ -14,22 +14,21 @@
     "prueba:datos": "electron pruebas/datos.prueba.js",
     "prueba:hacienda": "electron pruebas/hacienda.prueba.js",
     "prueba:correo": "electron pruebas/correo.prueba.js",
-    "prueba:app": "electron pruebas/prueba-completa.js",
+    "prueba:app": "electron pruebas/app.prueba.js",
     "reconstruir": "electron-builder install-app-deps",
-    "postinstall": "electron-builder install-app-deps",
     "dist": "electron-builder --win --x64"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
-    "electron-log": "^5.2.0",
-    "electron-updater": "^6.3.9",
-    "node-forge": "^1.4.0",
-    "nodemailer": "10.0.15"
+    "better-sqlite3": "^13.0.3",
+    "electron-log": "^5.4.4",
+    "electron-updater": "6.8.10",
+    "node-forge": "1.4.2",
+    "nodemailer": "10.1.7"
   },
   "devDependencies": {
     "@xmldom/xmldom": "^0.9.12",
-    "electron": "^33.2.0",
-    "electron-builder": "^25.1.8",
+    "electron": "44.9.3",
+    "electron-builder": "26.17.0",
     "xml-crypto": "^6.4.0"
   },
   "build": {
@@ -42,11 +41,30 @@
     "files": [
       "principal/**/*",
       "interfaz/**/*",
-      "package.json"
+      "package.json",
+      "!**/node_modules/better-sqlite3/{deps,src}/**",
+      "!**/node_modules/better-sqlite3/binding.gyp"
     ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**"
     ],
+    "electronLanguages": [
+      "es",
+      "es-419",
+      "en-US"
+    ],
+    "compression": "maximum",
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "loadBrowserProcessSpecificV8Snapshot": false,
+      "grantFileProtocolExtraPrivileges": true,
+      "resetAdHocDarwinSignature": true
+    },
     "publish": [
       {
         "provider": "github",
@@ -63,7 +81,10 @@
           ]
         }
       ],
-      "icon": "recursos/icono.png"
+      "icon": "recursos/icono.png",
+      "files": [
+        "!**/node_modules/better-sqlite3/prebuilds/{darwin-*,linux-*,linuxmusl-*,win32-arm64}.node"
+      ]
     },
     "nsis": {
       "oneClick": false,

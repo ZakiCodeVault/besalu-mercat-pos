@@ -16,7 +16,9 @@
  * calcula sobre el mismo texto que obtiene Hacienda al canonicalizar.
  */
 const crypto = require('crypto');
-const forge = require('node-forge');
+// node-forge solo se carga al abrir una llave (no frena el arranque de la caja)
+let _forge = null;
+const forgeLib = () => _forge || (_forge = require('node-forge'));
 const { POLITICA_FIRMA } = require('./catalogos');
 const { texto, atributo, NS_DS } = require('./xml');
 const { fechaIso } = require('../datos/montos');
@@ -44,7 +46,7 @@ function nombreRfc2253(atributos) {
       return clave + '=' + v;
     }
     // Atributos sin nombre corto (p. ej. serialNumber): OID=#DER en hexadecimal
-    const bytes = a.valueTagClass === forge.asn1.Type.UTF8 ? Buffer.from(String(a.value), 'utf8') : Buffer.from(String(a.value), 'latin1');
+    const bytes = a.valueTagClass === forgeLib().asn1.Type.UTF8 ? Buffer.from(String(a.value), 'utf8') : Buffer.from(String(a.value), 'latin1');
     const largo = bytes.length < 128 ? Buffer.from([bytes.length]) : Buffer.from([0x81, bytes.length]);
     return a.type + '=#' + Buffer.concat([Buffer.from([a.valueTagClass]), largo, bytes]).toString('hex');
   }).join(',');
@@ -65,28 +67,28 @@ function cedulaDelCertificado(serial) {
 function cargarLlave(p12, pin) {
   let archivo;
   try {
-    const der = forge.util.createBuffer(Buffer.from(p12).toString('binary'));
-    archivo = forge.pkcs12.pkcs12FromAsn1(forge.asn1.fromDer(der), String(pin));
+    const der = forgeLib().util.createBuffer(Buffer.from(p12).toString('binary'));
+    archivo = forgeLib().pkcs12.pkcs12FromAsn1(forgeLib().asn1.fromDer(der), String(pin));
   } catch (e) {
     if (/mac|password|invalid/i.test(e.message)) throw new Error('El PIN de la llave criptográfica no es correcto');
     throw new Error('El archivo no es una llave criptográfica .p12 válida');
   }
   const bolsas = [
-    ...(archivo.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag] || []),
-    ...(archivo.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag] || [])
+    ...(archivo.getBags({ bagType: forgeLib().pki.oids.pkcs8ShroudedKeyBag })[forgeLib().pki.oids.pkcs8ShroudedKeyBag] || []),
+    ...(archivo.getBags({ bagType: forgeLib().pki.oids.keyBag })[forgeLib().pki.oids.keyBag] || [])
   ];
   const llaveForge = bolsas.map((b) => b.key).find(Boolean);
   if (!llaveForge) throw new Error('La llave .p12 no contiene la clave privada');
-  const certificados = (archivo.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || []).map((b) => b.cert).filter(Boolean);
+  const certificados = (archivo.getBags({ bagType: forgeLib().pki.oids.certBag })[forgeLib().pki.oids.certBag] || []).map((b) => b.cert).filter(Boolean);
   const cert = certificados.find((c) => c.publicKey && c.publicKey.n && c.publicKey.n.equals(llaveForge.n));
   if (!cert) throw new Error('La llave .p12 no contiene el certificado de la clave privada');
 
-  const certificadoDer = Buffer.from(forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes(), 'binary');
+  const certificadoDer = Buffer.from(forgeLib().asn1.toDer(forgeLib().pki.certificateToAsn1(cert)).getBytes(), 'binary');
   const atributo = (lista, oid) => { const a = lista.find((x) => x.type === oid); return a ? String(a.value) : ''; };
   const serieSujeto = atributo(cert.subject.attributes, '2.5.4.5');
   const aBytes = (bigInt) => { let h = bigInt.toString(16); if (h.length % 2) h = '0' + h; return Buffer.from(h, 'hex'); };
   return {
-    llave: crypto.createPrivateKey(forge.pki.privateKeyToPem(llaveForge)),
+    llave: crypto.createPrivateKey(forgeLib().pki.privateKeyToPem(llaveForge)),
     certificadoDer,
     certificadoB64: certificadoDer.toString('base64'),
     emisorRfc2253: nombreRfc2253(cert.issuer.attributes),

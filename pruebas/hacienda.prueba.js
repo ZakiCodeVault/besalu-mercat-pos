@@ -21,8 +21,8 @@ const receptor = require('../principal/hacienda/receptor');
 const montos = require('../principal/datos/montos');
 const conector = require('../principal/hacienda/conector');
 const { leerRespuesta } = require('../principal/hacienda/api');
-const { generarLlavePrueba } = require('./llave-prueba');
-const { crearSimulador, validarXsd, firmaValida } = require('./hacienda-simulada');
+const { generarLlavePrueba } = require('./apoyo/llave-prueba');
+const { crearSimulador, validarXsd, firmaValida } = require('./apoyo/hacienda-simulada');
 
 const { conexion, productos, ventas, compras, caja, reportes, respaldos } = datos;
 let hayXmllint = true;
