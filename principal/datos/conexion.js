@@ -152,6 +152,10 @@ function verificarIntegridad() {
     const n = d.prepare('SELECT count(*) AS n, coalesce(max(numero), 0) AS mx FROM comprobantes WHERE tipo = ?').get(s.tipo);
     if (n.n !== s.ultimo || n.mx !== s.ultimo) problemas.push('Consecutivo ' + s.tipo + ': faltan números (' + n.n + ' de ' + s.ultimo + ')');
   }
+  for (const s of d.prepare('SELECT tipo, ultimo FROM secuencias_receptor').all()) {
+    const n = d.prepare('SELECT count(*) AS n, coalesce(max(numero), 0) AS mx FROM mensajes_receptor WHERE tipo = ?').get(s.tipo);
+    if (n.n !== s.ultimo || n.mx !== s.ultimo) problemas.push('Consecutivo de mensajes ' + s.tipo + ': faltan números (' + n.n + ' de ' + s.ultimo + ')');
+  }
   return { ok: problemas.length === 0, problemas, revisado: fechaLocal() };
 }
 

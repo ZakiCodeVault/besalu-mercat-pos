@@ -83,7 +83,7 @@ async function correr() {
   smtp = await crearSmtp({ usuario: SMTP_USUARIO, contrasena: SMTP_CONTRASENA, modo: 'plano' });
 
   console.log('\nEnvío de facturas por correo\n\nBase de datos');
-  await prueba('Una base v2 con facturas se actualiza a v3 sin perder nada (copia antes de migrar)', () => {
+  await prueba('Una base v2 con facturas se actualiza a la versión actual sin perder nada (copia antes de migrar)', () => {
     const Database = require('better-sqlite3');
     const { MIGRACIONES } = require('../principal/datos/esquema');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'besalu-correo-v2-'));
@@ -98,7 +98,7 @@ async function correr() {
     conexion.abrir(dir);
     try {
       const c = fila('SELECT * FROM comprobantes WHERE numero = 1');
-      ok(conexion.obtener().pragma('user_version', { simple: true }) === 3, 'versión');
+      ok(conexion.obtener().pragma('user_version', { simple: true }) === MIGRACIONES.length, 'versión');
       ok(c.total_comprobante === 113000 && c.receptor_correo === 'ana@correo.cr' && c.correo_estado === null && c.correo_intentos === 0, JSON.stringify(c));
       ok(fs.readdirSync(dir).some((f) => f.startsWith('antes-de-migrar-v2')), 'copia antes de migrar');
       ok(conexion.verificarIntegridad().ok);
@@ -128,7 +128,7 @@ async function correr() {
     medio_pago: 'sinpe', receptor: { tipo_id: '01', identificacion: '112345678', nombre: 'Ana Mora Solís', correo: correoCliente } }, extra));
 
   await prueba('Migración 3: columnas del correo aparte; las fiscales siguen inmutables', async () => {
-    ok(conexion.obtener().pragma('user_version', { simple: true }) === 3, 'versión del esquema');
+    ok(conexion.obtener().pragma('user_version', { simple: true }) === require('../principal/datos/esquema').MIGRACIONES.length, 'versión del esquema');
     const columnas = conexion.obtener().prepare('PRAGMA table_info(comprobantes)').all().map((c) => c.name);
     for (const c of ['correo_estado', 'correo_destino', 'correo_intentos', 'correo_error', 'correo_siguiente', 'correo_enviado_en']) ok(columnas.includes(c), c);
     const t = ventas.emitir({ lineas: [{ producto_id: leche.id, cantidad: 1 }], medio_pago: 'tarjeta' });

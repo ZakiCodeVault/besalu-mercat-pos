@@ -5,11 +5,14 @@
  *   IVA cobrado en ventas (facturas y tiquetes)
  * − IVA devuelto en notas de crédito
  * − IVA pagado en compras vigentes            (crédito fiscal)
+ *   + menos lo que el Mensaje Receptor declaró no acreditable: factura
+ *     rechazada (07), gasto sin crédito (04) o la parte no acreditada (02)
  * = IVA a pagar a Hacienda  (si es negativo, es saldo a favor)
  *
  * Fechas de los filtros: 'AAAA-MM-DD' (ambas incluidas).
  */
 const { obtener, leerAjustes } = require('./conexion');
+const { motivoNoAceptable } = require('../hacienda/receptor');
 
 const fechaComp = 'substr(c.fecha_emision, 1, 10)';
 // Un comprobante rechazado que ya se reemplazó no cuenta: cuenta su reemplazo
@@ -36,13 +39,29 @@ function iva(desde, hasta) {
   }
   const tarifas = Object.values(porTarifa).sort((a, b) => b.tarifa - a.tarifa);
   const sum = (k) => tarifas.reduce((s, x) => s + x[k], 0);
+  // Según el mensaje en curso de cada compra (el que Hacienda no rechazó)
+  const receptor = d.prepare(`
+    SELECT coalesce(sum(CASE
+             WHEN m.tipo = '07' OR m.condicion_impuesto = '04' THEN c.impuesto
+             WHEN m.condicion_impuesto = '02' THEN max(0, c.impuesto - CAST(round(CAST(m.impuesto_acreditar AS REAL) * 100) AS INTEGER))
+             ELSE 0 END), 0) AS no_acreditable
+    FROM compras c JOIN mensajes_receptor m ON m.compra_id = c.id AND m.estado_hacienda <> 'rechazado'
+    WHERE c.estado = 'vigente' AND c.fecha BETWEEN ? AND ?`).get(desde, hasta);
+  // Facturas importadas a nombre del negocio que Hacienda todavía no tiene aceptadas
+  const aj = leerAjustes();
+  receptor.sin_aceptar = d.prepare(`
+    SELECT c.xml_original FROM compras c LEFT JOIN mensajes_receptor m ON m.compra_id = c.id AND m.estado_hacienda <> 'rechazado'
+    WHERE c.estado = 'vigente' AND c.fecha BETWEEN ? AND ? AND c.xml_original IS NOT NULL AND coalesce(m.estado_hacienda, '') <> 'aceptado'`)
+    .all(desde, hasta).filter((c) => !motivoNoAceptable(c.xml_original, aj)).length;
   const debito = sum('ventas_iva') - sum('nc_iva');
-  const credito = sum('compras_iva');
+  const credito = sum('compras_iva') - receptor.no_acreditable;
   return {
     desde, hasta, tarifas,
     ventas_base: sum('ventas_base') - sum('nc_base'),
     iva_ventas: sum('ventas_iva'), iva_devoluciones: sum('nc_iva'),
-    debito_fiscal: debito, credito_fiscal: credito, compras_base: sum('compras_base'),
+    debito_fiscal: debito, compras_iva: sum('compras_iva'), credito_no_acreditable: receptor.no_acreditable,
+    credito_fiscal: credito, compras_base: sum('compras_base'),
+    compras_sin_aceptar: receptor.sin_aceptar,   // facturas importadas aún sin aceptar ante Hacienda
     iva_a_pagar: debito - credito
   };
 }

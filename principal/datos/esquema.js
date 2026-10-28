@@ -8,6 +8,8 @@
  *   - Los movimientos de inventario (kárdex) no se modifican ni se borran.
  *     El stock de cada producto es la suma de sus movimientos.
  *   - Una factura de compra no se puede registrar dos veces (mismo proveedor y número).
+ *   - Los mensajes de receptor (aceptación/rechazo de compras ante Hacienda) no se
+ *     modifican ni se borran y llevan su propio consecutivo (05, 06, 07).
  *   - Solo puede haber un turno de caja abierto; un turno cerrado no cambia.
  *   - Los totales deben cuadrar (total = base + impuesto).
  *
@@ -293,6 +295,91 @@ const MIGRACIONES = [
   ALTER TABLE comprobantes ADD COLUMN correo_siguiente  TEXT;    -- próximo intento (reintentos)
   ALTER TABLE comprobantes ADD COLUMN correo_enviado_en TEXT;    -- último envío correcto
   CREATE INDEX comprobantes_correo ON comprobantes(correo_estado) WHERE correo_estado IS NOT NULL;
+  `,
+
+  /* ===== Versión 4: Mensaje Receptor (aceptar o rechazar ante Hacienda las facturas de compra) ===== */
+  `
+  -- Consecutivos propios: 05 aceptación, 06 aceptación parcial, 07 rechazo
+  CREATE TABLE secuencias_receptor(
+    tipo   TEXT PRIMARY KEY CHECK(tipo IN ('05','06','07')),
+    ultimo INTEGER NOT NULL DEFAULT 0 CHECK(ultimo >= 0)
+  );
+  INSERT INTO secuencias_receptor(tipo, ultimo) VALUES ('05', 0), ('06', 0), ('07', 0);
+  CREATE TRIGGER secuencias_receptor_sin_saltos BEFORE UPDATE ON secuencias_receptor WHEN NEW.ultimo <> OLD.ultimo + 1
+  BEGIN SELECT RAISE(ABORT, 'Consecutivo inválido: solo puede avanzar de 1 en 1'); END;
+  CREATE TRIGGER secuencias_receptor_no_borrar BEFORE DELETE ON secuencias_receptor
+  BEGIN SELECT RAISE(ABORT, 'Los consecutivos no se pueden borrar'); END;
+
+  -- Montos con 5 decimales, como texto: son los de la factura del proveedor, tal cual van en el XML
+  CREATE TABLE mensajes_receptor(
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    compra_id               INTEGER NOT NULL REFERENCES compras(id),
+    tipo                    TEXT NOT NULL CHECK(tipo IN ('05','06','07')),
+    numero                  INTEGER NOT NULL CHECK(numero > 0),
+    consecutivo             TEXT NOT NULL UNIQUE CHECK(length(consecutivo) = 20 AND substr(consecutivo, 9, 2) = tipo),
+    clave                   TEXT NOT NULL CHECK(length(clave) = 50),        -- clave de la factura del proveedor
+    fecha_emision           TEXT NOT NULL,
+    mensaje                 INTEGER NOT NULL CHECK(mensaje = CASE tipo WHEN '05' THEN 1 WHEN '06' THEN 2 ELSE 3 END),
+    detalle                 TEXT CHECK(detalle IS NULL OR length(detalle) <= 160),
+    emisor_tipo_id          TEXT NOT NULL,                                   -- el proveedor
+    emisor_identificacion   TEXT NOT NULL,
+    receptor_tipo_id        TEXT NOT NULL,                                   -- el negocio
+    receptor_identificacion TEXT NOT NULL,
+    codigo_actividad        TEXT,
+    condicion_impuesto      TEXT CHECK(condicion_impuesto IS NULL OR condicion_impuesto IN ('01','02','03','04','05')),
+    monto_impuesto          TEXT,
+    impuesto_acreditar      TEXT,
+    gasto_aplicable         TEXT,
+    total_factura           TEXT NOT NULL,
+    estado_hacienda         TEXT NOT NULL DEFAULT 'pendiente'
+                              CHECK(estado_hacienda IN ('pendiente','enviado','aceptado','rechazado','error')),
+    hacienda_intentos       INTEGER NOT NULL DEFAULT 0,
+    hacienda_error          TEXT,
+    hacienda_mensaje        TEXT,
+    hacienda_respuesta      TEXT,
+    hacienda_fecha          TEXT,
+    hacienda_siguiente      TEXT,
+    hacienda_ambiente       TEXT,
+    xml_firmado             TEXT,
+    creado_en               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(tipo, numero),
+    -- Aceptación parcial y rechazo llevan el motivo (Anexo v4.4: 5 a 160 caracteres)
+    CHECK(tipo = '05' OR length(trim(coalesce(detalle, ''))) >= 5),
+    -- El rechazo no acredita ni aplica nada
+    CHECK(tipo <> '07' OR (condicion_impuesto IS NULL AND impuesto_acreditar IS NULL AND gasto_aplicable IS NULL))
+  );
+  CREATE INDEX mensajes_receptor_compra ON mensajes_receptor(compra_id);
+  CREATE INDEX mensajes_receptor_estado ON mensajes_receptor(estado_hacienda);
+  -- Una compra tiene un solo mensaje en curso; si Hacienda rechaza el mensaje se puede enviar otro
+  CREATE UNIQUE INDEX mensajes_receptor_vigente ON mensajes_receptor(compra_id) WHERE estado_hacienda <> 'rechazado';
+
+  CREATE TRIGGER mensajes_receptor_numero_valido BEFORE INSERT ON mensajes_receptor
+  WHEN NEW.numero <> (SELECT ultimo FROM secuencias_receptor WHERE tipo = NEW.tipo)
+  BEGIN SELECT RAISE(ABORT, 'El número del mensaje no coincide con el consecutivo'); END;
+  CREATE TRIGGER mensajes_receptor_clave_compra BEFORE INSERT ON mensajes_receptor
+  WHEN coalesce((SELECT clave FROM compras WHERE id = NEW.compra_id), '') <> NEW.clave
+  BEGIN SELECT RAISE(ABORT, 'La clave del mensaje no es la de la factura de compra'); END;
+  CREATE TRIGGER mensajes_receptor_compra_vigente BEFORE INSERT ON mensajes_receptor
+  WHEN NEW.tipo <> '07' AND coalesce((SELECT estado FROM compras WHERE id = NEW.compra_id), '') <> 'vigente'
+  BEGIN SELECT RAISE(ABORT, 'Una compra anulada no se puede aceptar ante Hacienda'); END;
+  -- Inmutables: solo se puede actualizar el estado del envío a Hacienda
+  CREATE TRIGGER mensajes_receptor_inmutables BEFORE UPDATE OF
+    compra_id, tipo, numero, consecutivo, clave, fecha_emision, mensaje, detalle, emisor_tipo_id, emisor_identificacion,
+    receptor_tipo_id, receptor_identificacion, codigo_actividad, condicion_impuesto, monto_impuesto, impuesto_acreditar,
+    gasto_aplicable, total_factura, creado_en ON mensajes_receptor
+  BEGIN SELECT RAISE(ABORT, 'Mensaje de receptor emitido: no se puede modificar'); END;
+  CREATE TRIGGER mensajes_receptor_no_borrar BEFORE DELETE ON mensajes_receptor
+  BEGIN SELECT RAISE(ABORT, 'Mensaje de receptor emitido: no se puede borrar'); END;
+  CREATE TRIGGER mensajes_receptor_xml_inmutable BEFORE UPDATE OF xml_firmado ON mensajes_receptor
+  WHEN OLD.xml_firmado IS NOT NULL AND OLD.estado_hacienda NOT IN ('pendiente','error')
+   AND NEW.xml_firmado IS NOT OLD.xml_firmado
+  BEGIN SELECT RAISE(ABORT, 'El XML ya fue enviado a Hacienda: no se puede modificar'); END;
+  CREATE TRIGGER mensajes_receptor_estado_final BEFORE UPDATE OF estado_hacienda ON mensajes_receptor
+  WHEN OLD.estado_hacienda IN ('aceptado','rechazado') AND NEW.estado_hacienda <> OLD.estado_hacienda
+  BEGIN SELECT RAISE(ABORT, 'La respuesta de Hacienda es definitiva: no se puede cambiar'); END;
+  CREATE TRIGGER mensajes_receptor_respuesta_final BEFORE UPDATE OF hacienda_respuesta ON mensajes_receptor
+  WHEN OLD.hacienda_respuesta IS NOT NULL AND NEW.hacienda_respuesta IS NOT OLD.hacienda_respuesta
+  BEGIN SELECT RAISE(ABORT, 'La respuesta de Hacienda es definitiva: no se puede cambiar'); END;
   `
 ];
 

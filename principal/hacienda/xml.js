@@ -216,4 +216,4 @@ function construir(c, a) {
   return { xml, raiz: raiz.elemento, ns: raiz.ns, montos: m };
 }
 
-module.exports = { construir, calcularMontos, baseEIva, decimal5, texto, atributo, NS_DS };
+module.exports = { construir, calcularMontos, baseEIva, decimal5, texto, atributo, e, limpio, U, NS_DS };
