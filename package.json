@@ -43,11 +43,13 @@
       "interfaz/**/*",
       "package.json",
       "!**/node_modules/better-sqlite3/{deps,src}/**",
-      "!**/node_modules/better-sqlite3/binding.gyp"
+      "!**/node_modules/better-sqlite3/binding.gyp",
+      "!**/node_modules/better-sqlite3/build/**"
     ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**"
     ],
+    "npmRebuild": false,
     "electronLanguages": [
       "es",
       "es-419",

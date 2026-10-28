@@ -42,6 +42,17 @@ jobs:
       - name: Pruebas (datos, Hacienda, correo y app)
         run: npm run prueba
 
+      # electron-builder sube los archivos en paralelo: si el Release no existe, cada subida
+      # crea uno y quedan borradores duplicados. Se crea antes, una sola vez.
+      - name: Crear el borrador del Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "$VERSION" --notes ""
+
       - name: Compilar y publicar el instalador
         env:
           # Token automático del repo (permite crear el Release).
