@@ -54,9 +54,14 @@ async function renderAjustes() {
       el('button', { class: 'btn btn--accent btn--sm', onclick: respaldarAhora }, [icon('database', 15), 'Respaldar ahora']),
       el('button', { class: 'btn btn--ghost btn--sm', onclick: elegirCarpetaExtra }, 'Carpeta extra…'),
       el('button', { class: 'btn btn--ghost btn--sm', onclick: () => BESALU.respaldos.abrirCarpeta() }, 'Abrir carpeta'),
-      el('button', { class: 'btn btn--ghost btn--sm', onclick: restaurarDesdeArchivo }, 'Restaurar desde archivo…')]),
+      el('button', { class: 'btn btn--ghost btn--sm', onclick: restaurarDesdeArchivo }, 'Cargar una copia…')]),
     respaldos && respaldos.length ? el('div', { class: 'tabla-wrap', style: 'border:1px solid var(--line);max-height:220px' }, el('table', {}, tbResp)) : null,
-    el('div', { class: 'note', text: 'Automático: una vez al día y al cerrar caja. Se guardan los últimos 60. Cada respaldo se verifica al crearlo.' })]));
+    el('div', { class: 'note', text: 'Automático: una vez al día y al cerrar caja. Se guardan los últimos 60. Cada respaldo se verifica al crearlo.' }),
+    el('div', { class: 'hseccion' }, [el('b', { text: 'Copia completa y exportación' }),
+      el('div', { class: 'mini', text: 'La copia completa es un solo archivo .sqlite con todo (ventas, compras, órdenes, inventario, clientes y ajustes): guárdela en una USB o en la nube y se puede cargar aquí mismo, o en otra computadora con la app.' }),
+      el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px' }, [
+        el('button', { class: 'btn btn--accent btn--sm', onclick: exportarCopiaCompleta }, [icon('database', 15), 'Exportar copia completa…']),
+        el('button', { class: 'btn btn--ghost btn--sm', onclick: exportarTodoExcel }, [icon('download', 15), 'Exportar todo a Excel…'])])])]));
 
   /* ---- integridad y otros ---- */
   const integ = estado.integridad;
@@ -111,9 +116,17 @@ async function restaurarRespaldo(nombre) {
   if (r) { toast('Respaldo restaurado', 'ok', r.comprobantes + ' comprobantes · ' + r.productos + ' productos'); await App.reiniciarEstado(); }
 }
 async function restaurarDesdeArchivo() {
-  if (!(await confirmar('Restaurar desde archivo', AVISO_RESTAURAR, { peligro: true, escribir: 'RESTAURAR', aceptar: 'Elegir archivo' }))) return;
-  const r = await intentar(() => BESALU.respaldos.restaurarArchivo(), 'No se pudo restaurar');
-  if (r) { toast('Respaldo restaurado', 'ok', r.comprobantes + ' comprobantes'); await App.reiniciarEstado(); }
+  if (!(await confirmar('Cargar una copia', AVISO_RESTAURAR + '\n\nSe revisa el archivo antes de cargarlo; si algo falla, todo queda como estaba.', { peligro: true, escribir: 'RESTAURAR', aceptar: 'Elegir archivo' }))) return;
+  const r = await intentar(() => BESALU.respaldos.restaurarArchivo(), 'No se pudo cargar la copia');
+  if (r) { toast('Copia cargada', 'ok', r.comprobantes + ' comprobantes · ' + r.productos + ' productos'); await App.reiniciarEstado(); }
+}
+async function exportarCopiaCompleta() {
+  const r = await intentar(() => BESALU.respaldos.exportarCopia(), 'No se pudo exportar la copia');
+  if (r) toast('Copia completa guardada y verificada', 'ok', r.ruta);
+}
+async function exportarTodoExcel() {
+  const r = await intentar(() => BESALU.exportarTodo(), 'No se pudo exportar');
+  if (r) toast('Excel guardado', 'ok', r.ruta);
 }
 async function verificarAhora() {
   const v = await intentar(() => BESALU.sistema.verificar());

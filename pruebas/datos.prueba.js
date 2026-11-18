@@ -243,8 +243,16 @@ const uno = (q, ...p) => conexion.obtener().prepare(q).get(...p);
     const v = conexion.verificarIntegridad();
     if (!v.ok) throw new Error(v.problemas.join(' | '));
   });
-  prueba('Detecta y repara un stock alterado a mano', () => {
+  prueba('La existencia no se puede escribir a mano (solo con el kárdex)', () => {
+    falla(() => sql('UPDATE productos SET stock = 999 WHERE id = ?', leche.id), 'solo cambia con movimientos');
+    falla(() => sql("INSERT INTO productos(codigo, nombre, precio, stock) VALUES('X-STOCK', 'Con existencia', 100, 5)"), 'movimiento de inventario');
+  });
+  prueba('Detecta y repara un stock alterado desde afuera', () => {
+    // Simula que alguien abrió el archivo con otro programa y quitó la protección
+    const proteccion = conexion.obtener().prepare("SELECT sql FROM sqlite_master WHERE name = 'productos_stock_solo_kardex'").get().sql;
+    conexion.obtener().exec('DROP TRIGGER productos_stock_solo_kardex');
     sql('UPDATE productos SET stock = 999 WHERE id = ?', leche.id);
+    conexion.obtener().exec(proteccion);
     const v = conexion.verificarIntegridad();
     if (v.ok) throw new Error('no detectó el descuadre');
     igual(conexion.repararStock(), 1);

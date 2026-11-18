@@ -380,6 +380,123 @@ const MIGRACIONES = [
   CREATE TRIGGER mensajes_receptor_respuesta_final BEFORE UPDATE OF hacienda_respuesta ON mensajes_receptor
   WHEN OLD.hacienda_respuesta IS NOT NULL AND NEW.hacienda_respuesta IS NOT OLD.hacienda_respuesta
   BEGIN SELECT RAISE(ABORT, 'La respuesta de Hacienda es definitiva: no se puede cambiar'); END;
+  `,
+
+  /* ===== Versión 5: órdenes de compra a proveedores y protección del inventario ===== */
+  `
+  -- Orden de compra: borrador (se edita libremente) → emitida (se recibe la
+  -- mercadería, en una o varias entregas) → cerrada (con faltante) o cancelada.
+  -- El número se asigna al emitirla: los borradores no gastan números.
+  CREATE TABLE ordenes_compra(
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    numero         INTEGER UNIQUE CHECK(numero IS NULL OR numero > 0),
+    proveedor_id   INTEGER NOT NULL REFERENCES proveedores(id),
+    estado         TEXT NOT NULL DEFAULT 'borrador' CHECK(estado IN ('borrador','emitida','cerrada','cancelada')),
+    fecha_esperada TEXT NOT NULL DEFAULT '' CHECK(fecha_esperada = '' OR fecha_esperada GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    notas          TEXT NOT NULL DEFAULT '',
+    subtotal       INTEGER NOT NULL DEFAULT 0 CHECK(subtotal >= 0),   -- estimado, sin IVA
+    impuesto       INTEGER NOT NULL DEFAULT 0 CHECK(impuesto >= 0),
+    total          INTEGER NOT NULL DEFAULT 0 CHECK(total = subtotal + impuesto),
+    emitida_en     TEXT,
+    terminada_en   TEXT,                                               -- al cerrarla o cancelarla
+    motivo         TEXT,
+    creado_en      TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    actualizado_en TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    CHECK((estado = 'borrador') = (numero IS NULL)),
+    CHECK(estado NOT IN ('cerrada','cancelada') OR length(trim(coalesce(motivo, ''))) > 0)
+  );
+  CREATE INDEX ordenes_compra_estado    ON ordenes_compra(estado);
+  CREATE INDEX ordenes_compra_proveedor ON ordenes_compra(proveedor_id);
+
+  CREATE TABLE orden_compra_lineas(
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    orden_id       INTEGER NOT NULL REFERENCES ordenes_compra(id),
+    linea          INTEGER NOT NULL CHECK(linea > 0),
+    producto_id    INTEGER NOT NULL REFERENCES productos(id),
+    descripcion    TEXT NOT NULL CHECK(length(trim(descripcion)) > 0),
+    cantidad       REAL NOT NULL CHECK(cantidad > 0),
+    costo_unitario INTEGER NOT NULL CHECK(costo_unitario >= 0),       -- sin IVA (el pactado)
+    tarifa_iva     REAL NOT NULL CHECK(tarifa_iva IN (0, 0.5, 1, 2, 4, 8, 13)),
+    subtotal       INTEGER NOT NULL CHECK(subtotal >= 0),
+    impuesto       INTEGER NOT NULL CHECK(impuesto >= 0),
+    total_linea    INTEGER NOT NULL CHECK(total_linea = subtotal + impuesto),
+    UNIQUE(orden_id, linea),
+    UNIQUE(orden_id, producto_id)                                      -- cada producto una sola vez por orden
+  );
+  CREATE INDEX orden_compra_lineas_producto ON orden_compra_lineas(producto_id);
+
+  -- Solo un borrador cambia sus líneas
+  CREATE TRIGGER oc_lineas_agregar BEFORE INSERT ON orden_compra_lineas
+  WHEN coalesce((SELECT estado FROM ordenes_compra WHERE id = NEW.orden_id), '') <> 'borrador'
+  BEGIN SELECT RAISE(ABORT, 'La orden ya fue emitida: sus productos no se pueden cambiar'); END;
+  CREATE TRIGGER oc_lineas_cambiar BEFORE UPDATE ON orden_compra_lineas
+  WHEN coalesce((SELECT estado FROM ordenes_compra WHERE id = OLD.orden_id), '') <> 'borrador'
+  BEGIN SELECT RAISE(ABORT, 'La orden ya fue emitida: sus productos no se pueden cambiar'); END;
+  CREATE TRIGGER oc_lineas_quitar BEFORE DELETE ON orden_compra_lineas
+  WHEN coalesce((SELECT estado FROM ordenes_compra WHERE id = OLD.orden_id), '') <> 'borrador'
+  BEGIN SELECT RAISE(ABORT, 'La orden ya fue emitida: sus productos no se pueden cambiar'); END;
+
+  -- Estados: borrador → emitida → cerrada | cancelada (nunca hacia atrás)
+  CREATE TRIGGER oc_estados BEFORE UPDATE OF estado ON ordenes_compra
+  WHEN NOT (NEW.estado = OLD.estado
+         OR (OLD.estado = 'borrador' AND NEW.estado = 'emitida')
+         OR (OLD.estado = 'emitida' AND NEW.estado IN ('cerrada','cancelada')))
+  BEGIN SELECT RAISE(ABORT, 'Ese cambio de estado de la orden no está permitido'); END;
+  CREATE TRIGGER oc_emitir BEFORE UPDATE OF estado ON ordenes_compra
+  WHEN OLD.estado = 'borrador' AND NEW.estado = 'emitida' AND (
+       NOT EXISTS (SELECT 1 FROM orden_compra_lineas WHERE orden_id = NEW.id)
+    OR NEW.subtotal <> (SELECT sum(subtotal) FROM orden_compra_lineas WHERE orden_id = NEW.id)
+    OR NEW.impuesto <> (SELECT sum(impuesto) FROM orden_compra_lineas WHERE orden_id = NEW.id))
+  BEGIN SELECT RAISE(ABORT, 'La orden no tiene productos o sus totales no cuadran'); END;
+  CREATE TRIGGER oc_cancelar BEFORE UPDATE OF estado ON ordenes_compra
+  WHEN NEW.estado = 'cancelada' AND OLD.estado <> 'cancelada'
+   AND EXISTS (SELECT 1 FROM compras WHERE orden_id = NEW.id AND estado = 'vigente')
+  BEGIN SELECT RAISE(ABORT, 'La orden ya tiene mercadería recibida: ciérrela en vez de cancelarla'); END;
+  CREATE TRIGGER oc_numero_inmutable BEFORE UPDATE OF numero ON ordenes_compra
+  WHEN OLD.numero IS NOT NULL AND NEW.numero IS NOT OLD.numero
+  BEGIN SELECT RAISE(ABORT, 'El número de la orden no se puede cambiar'); END;
+  CREATE TRIGGER oc_emitida_inmutable BEFORE UPDATE OF proveedor_id, fecha_esperada, notas, subtotal, impuesto, total ON ordenes_compra
+  WHEN OLD.estado <> 'borrador'
+  BEGIN SELECT RAISE(ABORT, 'La orden ya fue emitida: no se puede modificar'); END;
+  CREATE TRIGGER oc_no_borrar BEFORE DELETE ON ordenes_compra
+  WHEN OLD.estado <> 'borrador'
+  BEGIN SELECT RAISE(ABORT, 'Una orden emitida no se puede borrar (se cancela o se cierra)'); END;
+
+  -- Cada recepción es una factura de compra ligada a la orden (y cada línea, a la línea pedida)
+  ALTER TABLE compras ADD COLUMN orden_id INTEGER REFERENCES ordenes_compra(id);
+  ALTER TABLE compra_lineas ADD COLUMN orden_linea_id INTEGER REFERENCES orden_compra_lineas(id);
+  CREATE INDEX compras_orden ON compras(orden_id) WHERE orden_id IS NOT NULL;
+  CREATE INDEX compra_lineas_orden_linea ON compra_lineas(orden_linea_id) WHERE orden_linea_id IS NOT NULL;
+  CREATE TRIGGER compras_orden_inmutable BEFORE UPDATE OF orden_id ON compras
+  BEGIN SELECT RAISE(ABORT, 'Compra registrada: no se puede modificar (anúlela y regístrela de nuevo)'); END;
+  CREATE TRIGGER compras_orden_valida BEFORE INSERT ON compras
+  WHEN NEW.orden_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM ordenes_compra WHERE id = NEW.orden_id AND estado = 'emitida' AND proveedor_id = NEW.proveedor_id)
+  BEGIN SELECT RAISE(ABORT, 'La orden de compra no está abierta o es de otro proveedor'); END;
+  CREATE TRIGGER compra_lineas_orden_valida BEFORE INSERT ON compra_lineas
+  WHEN NEW.orden_linea_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM orden_compra_lineas ol JOIN compras c ON c.id = NEW.compra_id
+    WHERE ol.id = NEW.orden_linea_id AND ol.orden_id = c.orden_id AND ol.producto_id = NEW.producto_id)
+  BEGIN SELECT RAISE(ABORT, 'La línea recibida no corresponde a esa orden de compra'); END;
+
+  -- Avance de cada línea: lo recibido sale de las compras vigentes. Si una
+  -- recepción se anula, la orden vuelve a quedar pendiente sola.
+  CREATE VIEW orden_compra_avance AS
+    SELECT ol.id AS orden_linea_id, ol.orden_id, ol.producto_id, ol.cantidad AS pedido,
+           round(coalesce(sum(CASE WHEN c.estado = 'vigente' THEN cl.cantidad END), 0), 3) AS recibido
+    FROM orden_compra_lineas ol
+    LEFT JOIN compra_lineas cl ON cl.orden_linea_id = ol.id
+    LEFT JOIN compras c ON c.id = cl.compra_id
+    GROUP BY ol.id;
+
+  -- La existencia SOLO cambia con movimientos del kárdex (nunca escrita a mano)
+  CREATE TRIGGER productos_stock_inicial BEFORE INSERT ON productos
+  WHEN NEW.stock <> 0
+  BEGIN SELECT RAISE(ABORT, 'La existencia inicial se registra como movimiento de inventario'); END;
+  CREATE TRIGGER productos_stock_solo_kardex BEFORE UPDATE OF stock ON productos
+  WHEN round(NEW.stock, 3) <> round(OLD.stock + coalesce((SELECT cantidad FROM movimientos WHERE producto_id = NEW.id ORDER BY id DESC LIMIT 1), 0), 3)
+   AND round(NEW.stock, 3) <> round((SELECT coalesce(sum(cantidad), 0) FROM movimientos WHERE producto_id = NEW.id), 3)
+  BEGIN SELECT RAISE(ABORT, 'La existencia solo cambia con movimientos de inventario (kárdex)'); END;
   `
 ];
 

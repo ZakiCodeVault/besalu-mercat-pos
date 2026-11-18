@@ -8,7 +8,10 @@
  *  - La misma factura (proveedor + número, o la misma clave) no se puede
  *    registrar dos veces: evita contar doble el IVA.
  *  - Una compra no se edita: si hubo un error se ANULA (revierte inventario)
- *    y se registra de nuevo.
+ *    y se registra de nuevo. Si al anularla alguna existencia quedaría
+ *    negativa (la mercadería ya se vendió), hay que confirmarlo.
+ *  - Una compra puede ser la RECEPCIÓN de una orden de compra: cada línea se
+ *    liga a la línea pedida y no se recibe más de lo pendiente sin confirmarlo.
  *  - Una factura electrónica importada se acepta o rechaza ante Hacienda con
  *    un Mensaje Receptor (05 aceptación, 06 parcial, 07 rechazo), que lleva su
  *    propio consecutivo y no se modifica ni se borra.
@@ -40,10 +43,12 @@ function guardarProveedor(d, p) {
 /**
  * Registra una factura de compra.
  * @param {object} c {
- *   proveedor: {tipo_id, identificacion, nombre, correo?},
+ *   proveedor: {tipo_id, identificacion, nombre, correo?}   (en una recepción puede omitirse: es el de la orden),
  *   tipo_documento?, numero_documento, clave?, fecha (AAAA-MM-DD), otros_cargos?, notas?, xml_original?,
+ *   orden_id?        recepción de una orden de compra emitida,
+ *   permitir_exceso? true para aceptar más de lo pendiente (el proveedor envió de más),
  *   lineas: [{ producto_id | nuevo_producto:{codigo,nombre,precio,tarifa_iva,cabys?},
- *              descripcion?, cantidad, costo_unitario (céntimos sin IVA), tarifa_iva,
+ *              orden_linea_id?, descripcion?, cantidad, costo_unitario (céntimos sin IVA), tarifa_iva,
  *              subtotal?, impuesto?  (si vienen del XML se respetan) }]
  * }
  */
@@ -59,15 +64,38 @@ function registrarCompra(c) {
   if (claveDoc && claveDoc.length !== 50) throw new Error('La clave de la factura debe tener 50 dígitos');
 
   return d.transaction(() => {
-    const prov = guardarProveedor(d, c.proveedor || {});
+    // Recepción de una orden: la orden tiene que estar emitida y ser del mismo proveedor
+    let orden = null;
+    if (c.orden_id) {
+      orden = d.prepare('SELECT o.*, p.identificacion, p.nombre AS proveedor_nombre, p.tipo_id FROM ordenes_compra o JOIN proveedores p ON p.id = o.proveedor_id WHERE o.id = ?').get(c.orden_id);
+      if (!orden) throw new Error('La orden de compra no existe');
+      if (orden.estado !== 'emitida') throw new Error('La orden ' + numeroOrden(orden.numero) + ' no está abierta para recibir mercadería');
+    }
+    const datosProv = orden && !(c.proveedor && c.proveedor.identificacion)
+      ? { tipo_id: orden.tipo_id, identificacion: orden.identificacion, nombre: orden.proveedor_nombre } : (c.proveedor || {});
+    const prov = guardarProveedor(d, datosProv);
+    if (orden && prov.id !== orden.proveedor_id) {
+      throw new Error('La factura es de ' + prov.nombre + ' pero la orden ' + numeroOrden(orden.numero) + ' es de ' + orden.proveedor_nombre);
+    }
     const repetida = d.prepare('SELECT id FROM compras WHERE (proveedor_id = ? AND numero_documento = ?) OR (? <> \'\' AND clave = ?)')
       .get(prov.id, numero, claveDoc, claveDoc);
     if (repetida) throw new Error('Esta factura de compra ya fue registrada');
 
     const lineas = [];
+    const avance = orden ? new Map(d.prepare('SELECT * FROM orden_compra_avance WHERE orden_id = ?').all(orden.id).map((a) => [a.orden_linea_id, a])) : null;
+    const porLineaOrden = new Map();   // lo que entra en ESTA factura por cada línea de la orden
     let n = 0;
     for (const l of c.lineas) {
       let productoId = l.producto_id ? Number(l.producto_id) : null;
+      let ordenLineaId = null;
+      if (l.orden_linea_id) {
+        if (!orden) throw new Error('Línea ' + (n + 1) + ': indica una orden de compra pero la factura no está ligada a ninguna');
+        const a = avance.get(Number(l.orden_linea_id));
+        if (!a) throw new Error('Línea ' + (n + 1) + ': no pertenece a la orden ' + numeroOrden(orden.numero));
+        if (productoId && productoId !== a.producto_id) throw new Error('Línea ' + (n + 1) + ': el producto no es el de la orden');
+        productoId = a.producto_id;
+        ordenLineaId = a.orden_linea_id;
+      }
       if (!productoId && l.nuevo_producto) {
         const existente = productos.buscarPorCodigo(l.nuevo_producto.codigo);
         productoId = existente ? existente.id : productos.crear(l.nuevo_producto, { conBitacora: true }).id;
@@ -83,20 +111,33 @@ function registrarCompra(c) {
       }
       const desc = String(l.descripcion || (productoId ? productos.obtenerPorId(productoId).nombre : '')).trim();
       if (!desc) throw new Error('Falta la descripción de la línea ' + (n + 1));
-      lineas.push(Object.assign({ linea: ++n, producto_id: productoId, descripcion: desc, cantidad, costo_unitario: costo, tarifa_iva: tarifa }, m));
+      lineas.push(Object.assign({ linea: ++n, producto_id: productoId, orden_linea_id: ordenLineaId, descripcion: desc, cantidad, costo_unitario: costo, tarifa_iva: tarifa }, m));
+      if (ordenLineaId) porLineaOrden.set(ordenLineaId, Math.round(((porLineaOrden.get(ordenLineaId) || 0) + cantidad) * 1000) / 1000);
     }
+    // No recibir más de lo que falta, salvo que se confirme (el proveedor envió de más)
+    if (orden && !c.permitir_exceso) {
+      for (const [olId, recibe] of porLineaOrden) {
+        const a = avance.get(olId);
+        const falta = Math.max(0, Math.round((a.pedido - a.recibido) * 1000) / 1000);
+        if (recibe > falta + 0.0005) {
+          const nombre = productos.obtenerPorId(a.producto_id).nombre;
+          throw new Error('"' + nombre + '": se reciben ' + recibe + ' pero de la orden ' + numeroOrden(orden.numero) + ' solo faltan ' + falta + '. Si el proveedor envió de más, confírmelo.');
+        }
+      }
+    }
+    if (orden && !porLineaOrden.size) throw new Error('La recepción no incluye ningún producto de la orden ' + numeroOrden(orden.numero));
 
     const subtotal = lineas.reduce((s, l) => s + l.subtotal, 0);
     const impuesto = lineas.reduce((s, l) => s + l.impuesto, 0);
     const otros = entero(c.otros_cargos, 'otros cargos');
-    const r = d.prepare(`INSERT INTO compras(proveedor_id, tipo_documento, numero_documento, clave, fecha, subtotal, impuesto, otros_cargos, total, notas, xml_original)
-                         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    const r = d.prepare(`INSERT INTO compras(proveedor_id, tipo_documento, numero_documento, clave, fecha, subtotal, impuesto, otros_cargos, total, notas, xml_original, orden_id)
+                         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(prov.id, c.tipo_documento || '01', numero, claveDoc || null, fecha, subtotal, impuesto, otros,
-           subtotal + impuesto + otros, String(c.notas || ''), c.xml_original || null);
+           subtotal + impuesto + otros, String(c.notas || ''), c.xml_original || null, orden ? orden.id : null);
     const compraId = Number(r.lastInsertRowid);
 
-    const insL = d.prepare(`INSERT INTO compra_lineas(compra_id, linea, producto_id, descripcion, cantidad, costo_unitario, subtotal, tarifa_iva, impuesto, total_linea)
-                            VALUES(@compra_id, @linea, @producto_id, @descripcion, @cantidad, @costo_unitario, @subtotal, @tarifa_iva, @impuesto, @total_linea)`);
+    const insL = d.prepare(`INSERT INTO compra_lineas(compra_id, linea, producto_id, orden_linea_id, descripcion, cantidad, costo_unitario, subtotal, tarifa_iva, impuesto, total_linea)
+                            VALUES(@compra_id, @linea, @producto_id, @orden_linea_id, @descripcion, @cantidad, @costo_unitario, @subtotal, @tarifa_iva, @impuesto, @total_linea)`);
     const insM = d.prepare(`INSERT INTO movimientos(producto_id, fecha, tipo, cantidad, costo_unitario, compra_id, nota)
                             VALUES(?, ?, 'compra', ?, ?, ?, ?)`);
     const actCosto = d.prepare('UPDATE productos SET costo = ?, actualizado_en = ? WHERE id = ?');
@@ -111,16 +152,31 @@ function registrarCompra(c) {
           ? Math.round((stockPrevio * p.costo + l.cantidad * l.costo_unitario) / (stockPrevio + l.cantidad))
           : l.costo_unitario;
         actCosto.run(nuevoCosto, ahora, p.id);
-        insM.run(p.id, ahora, l.cantidad, l.costo_unitario, compraId, 'Factura ' + numero + ' · ' + prov.nombre);
+        insM.run(p.id, ahora, l.cantidad, l.costo_unitario, compraId, 'Factura ' + numero + ' · ' + prov.nombre + (orden ? ' · ' + numeroOrden(orden.numero) : ''));
       }
     }
-    registrar('compra', { id: compraId, proveedor: prov.nombre, numero, total: subtotal + impuesto + otros, iva: impuesto });
+    registrar('compra', { id: compraId, proveedor: prov.nombre, numero, total: subtotal + impuesto + otros, iva: impuesto,
+      orden: orden ? numeroOrden(orden.numero) : undefined, exceso: orden && c.permitir_exceso ? true : undefined });
     return obtenerPorId(compraId);
   })();
 }
 
-/** Anula una compra: saca del inventario lo que había entrado. */
-function anular(id, razon) {
+/**
+ * Productos que quedarían con existencia negativa si se anula la compra
+ * (porque esa mercadería ya se vendió o se ajustó).
+ */
+function revisarAnulacion(id) {
+  return obtener().prepare(`
+    SELECT p.id, p.nombre, p.stock, round(sum(l.cantidad), 3) AS sale, round(p.stock - sum(l.cantidad), 3) AS quedaria
+    FROM compra_lineas l JOIN productos p ON p.id = l.producto_id
+    WHERE l.compra_id = ? GROUP BY p.id HAVING quedaria < 0 ORDER BY p.nombre`).all(id);
+}
+
+/**
+ * Anula una compra: saca del inventario lo que había entrado.
+ * @param {object} [o] { permitirNegativo: true } para anular aunque alguna existencia quede negativa
+ */
+function anular(id, razon, { permitirNegativo = false } = {}) {
   const d = obtener();
   const motivo = String(razon || '').trim();
   if (!motivo) throw new Error('Indique el motivo de la anulación');
@@ -128,6 +184,11 @@ function anular(id, razon) {
     const c = d.prepare('SELECT * FROM compras WHERE id = ?').get(id);
     if (!c) throw new Error('La compra no existe');
     if (c.estado === 'anulada') throw new Error('La compra ya estaba anulada');
+    const negativos = revisarAnulacion(id);
+    if (negativos.length && !permitirNegativo) {
+      throw new Error('Al anularla quedarían existencias negativas: ' +
+        negativos.map((x) => x.nombre + ' (' + x.quedaria + ')').join(', ') + '. Confirme si de todos modos quiere anularla.');
+    }
     const ahora = fechaLocal();
     const insM = d.prepare(`INSERT INTO movimientos(producto_id, fecha, tipo, cantidad, costo_unitario, compra_id, nota)
                             VALUES(?, ?, 'anulacion_compra', ?, ?, ?, ?)`);
@@ -135,17 +196,20 @@ function anular(id, razon) {
       insM.run(l.producto_id, ahora, -l.cantidad, l.costo_unitario, id, 'Anulación factura ' + c.numero_documento + ': ' + motivo);
     }
     d.prepare("UPDATE compras SET estado = 'anulada', anulada_en = ?, anulada_razon = ? WHERE id = ?").run(ahora, motivo, id);
-    registrar('compra_anulada', { id, numero: c.numero_documento, motivo });
+    registrar('compra_anulada', { id, numero: c.numero_documento, motivo, negativos: negativos.length ? negativos.map((x) => x.nombre) : undefined });
     return obtenerPorId(id);
   })();
 }
 
 function obtenerPorId(id) {
   const d = obtener();
-  const c = d.prepare(`SELECT c.*, p.nombre AS proveedor_nombre, p.identificacion AS proveedor_identificacion, p.tipo_id AS proveedor_tipo_id
-                       FROM compras c JOIN proveedores p ON p.id = c.proveedor_id WHERE c.id = ?`).get(id);
+  const c = d.prepare(`SELECT c.*, p.nombre AS proveedor_nombre, p.identificacion AS proveedor_identificacion, p.tipo_id AS proveedor_tipo_id,
+                              o.numero AS orden_numero
+                       FROM compras c JOIN proveedores p ON p.id = c.proveedor_id
+                       LEFT JOIN ordenes_compra o ON o.id = c.orden_id WHERE c.id = ?`).get(id);
   if (!c) return null;
   c.tiene_xml = !!c.xml_original;
+  c.orden_texto = c.orden_numero ? numeroOrden(c.orden_numero) : null;
   // Una factura a nombre de otra cédula, sin receptor o un tiquete no se acepta ante Hacienda
   c.no_aceptable = c.xml_original ? motivoNoAceptable(c.xml_original, leerAjustes()) : null;
   delete c.xml_original;
@@ -212,7 +276,8 @@ function listar({ desde, hasta, texto, limite = 300 } = {}) {
   if (texto) { cond.push('(c.numero_documento LIKE @t OR p.nombre LIKE @t OR p.identificacion LIKE @t)'); par.t = '%' + texto + '%'; }
   const aj = leerAjustes();
   return obtener().prepare(`
-    SELECT c.id, c.fecha, c.numero_documento, c.tipo_documento, c.subtotal, c.impuesto, c.otros_cargos, c.total, c.estado,
+    SELECT c.id, c.fecha, c.numero_documento, c.tipo_documento, c.subtotal, c.impuesto, c.otros_cargos, c.total, c.estado, c.orden_id,
+           (SELECT o.numero FROM ordenes_compra o WHERE o.id = c.orden_id) AS orden_numero,
            p.nombre AS proveedor, p.identificacion AS proveedor_identificacion,
            (SELECT count(*) FROM compra_lineas l WHERE l.compra_id = c.id) AS lineas,
            c.xml_original IS NOT NULL AS tiene_xml, m.tipo AS mensaje_tipo, m.estado_hacienda AS mensaje_estado,
@@ -228,8 +293,10 @@ function listar({ desde, hasta, texto, limite = 300 } = {}) {
   });
 }
 
+const numeroOrden = (n) => 'OC-' + String(n).padStart(5, '0');
+
 function listarProveedores() {
   return obtener().prepare('SELECT * FROM proveedores ORDER BY nombre COLLATE NOCASE').all();
 }
 
-module.exports = { registrarCompra, anular, obtenerPorId, listar, listarProveedores, facturaDe, registrarMensaje, obtenerMensaje };
+module.exports = { registrarCompra, anular, revisarAnulacion, obtenerPorId, listar, listarProveedores, guardarProveedor, facturaDe, registrarMensaje, obtenerMensaje };

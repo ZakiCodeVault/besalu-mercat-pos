@@ -24,18 +24,48 @@ function configurar(carpetaDatos) {
 
 function carpetaRespaldos() { return carpeta; }
 
-/** Abre una copia en modo lectura y revisa que esté sana. */
+const TABLAS_BASICAS = ['config', 'productos', 'comprobantes', 'movimientos', 'compras', 'bitacora'];
+
+/**
+ * Abre una copia en modo lectura y revisa que esté sana y que sea de Besalú.
+ * Nunca lanza errores técnicos: devuelve { ok:false, detalle } con un mensaje claro.
+ */
 function verificarArchivo(ruta) {
-  const db = new Database(ruta, { readonly: true, fileMustExist: true });
+  let db;
+  try { db = new Database(ruta, { readonly: true, fileMustExist: true }); }
+  catch (e) { return { ok: false, detalle: 'No se pudo abrir el archivo' }; }
   try {
-    const integridad = db.pragma('integrity_check', { simple: true });
+    let integridad;
+    try { integridad = db.pragma('integrity_check', { simple: true }); }
+    catch (e) { return { ok: false, detalle: 'El archivo no es una base de datos (o está dañado)' }; }
+    if (integridad !== 'ok') return { ok: false, detalle: 'El archivo está dañado: ' + integridad };
+    const tablas = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((t) => t.name));
+    if (!TABLAS_BASICAS.every((t) => tablas.has(t))) return { ok: false, detalle: 'El archivo no es una copia de Besalú Mercat POS' };
+    const version = db.pragma('user_version', { simple: true });
+    const cuenta = (t) => (tablas.has(t) ? db.prepare('SELECT count(*) AS n FROM ' + t).get().n : 0);
     return {
-      ok: integridad === 'ok', detalle: integridad,
-      version: db.pragma('user_version', { simple: true }),
-      comprobantes: db.prepare('SELECT count(*) AS n FROM comprobantes').get().n,
-      productos: db.prepare('SELECT count(*) AS n FROM productos').get().n
+      ok: true, detalle: 'ok', version,
+      comprobantes: cuenta('comprobantes'), productos: cuenta('productos'), compras: cuenta('compras'),
+      ordenes: cuenta('ordenes_compra'), movimientos: cuenta('movimientos')
     };
   } finally { db.close(); }
+}
+
+/**
+ * Copia completa de la base a donde se elija (USB, OneDrive…), verificada.
+ * Se hace en caliente y es una sola base consistente: se carga con "Cargar copia".
+ */
+async function exportarCopia(destino) {
+  if (!destino) throw new Error('Falta el destino de la copia');
+  if (path.resolve(destino) === path.resolve(conexion.rutaArchivo())) throw new Error('Elija otro lugar: ese es el archivo en uso');
+  const temporal = destino + '.parcial';
+  fs.rmSync(temporal, { force: true });
+  await conexion.obtener().backup(temporal);
+  const v = verificarArchivo(temporal);
+  if (!v.ok) { fs.rmSync(temporal, { force: true }); throw new Error('La copia salió dañada: ' + v.detalle); }
+  fs.renameSync(temporal, destino);   // solo aparece con su nombre final si está completa y verificada
+  conexion.registrar('copia_exportada', { archivo: destino, productos: v.productos, comprobantes: v.comprobantes, compras: v.compras });
+  return Object.assign({ ruta: destino, bytes: fs.statSync(destino).size }, v);
 }
 
 async function crear(motivo = 'manual') {
@@ -87,7 +117,9 @@ async function restaurar(nombreOruta) {
   let origen = path.isAbsolute(nombreOruta) ? nombreOruta : path.join(carpeta, path.basename(nombreOruta));
   if (!fs.existsSync(origen)) throw new Error('No se encontró el respaldo');
   const v = verificarArchivo(origen);
-  if (!v.ok) throw new Error('Ese respaldo está dañado y no se puede restaurar');
+  if (!v.ok) throw new Error('No se puede cargar: ' + v.detalle);
+  const { MIGRACIONES } = require('./esquema');
+  if (v.version > MIGRACIONES.length) throw new Error('Esa copia es de una versión más nueva de la app: actualice la app antes de cargarla');
   if (path.dirname(origen) !== carpeta) {   // viene de afuera (USB): se copia primero
     const copia = path.join(carpeta, 'besalu-' + fechaLocal().replace(/[: ]/g, '-') + '-importado.sqlite');
     fs.copyFileSync(origen, copia);
@@ -97,11 +129,25 @@ async function restaurar(nombreOruta) {
   const actual = conexion.rutaArchivo();
   const carpetaDatos = path.dirname(actual);
   conexion.cerrar();
+  // La base actual se aparta (no se borra) hasta comprobar que la copia abre bien
+  const apartada = actual + '.antes-de-cargar';
+  fs.rmSync(apartada, { force: true });
+  fs.renameSync(actual, apartada);
   for (const sufijo of ['-wal', '-shm']) fs.rmSync(actual + sufijo, { force: true });
-  fs.copyFileSync(origen, actual);
-  conexion.abrir(carpetaDatos);
-  conexion.registrar('restauracion', { desde: path.basename(origen), comprobantes: v.comprobantes });
-  return { ok: true, comprobantes: v.comprobantes, productos: v.productos };
+  try {
+    fs.copyFileSync(origen, actual);
+    conexion.abrir(carpetaDatos);   // aplica las migraciones si la copia es de una versión anterior
+  } catch (e) {
+    try { conexion.cerrar(); } catch (x) { /* no llegó a abrir */ }
+    fs.rmSync(actual, { force: true });
+    for (const sufijo of ['-wal', '-shm']) fs.rmSync(actual + sufijo, { force: true });
+    fs.renameSync(apartada, actual);
+    conexion.abrir(carpetaDatos);
+    throw new Error('La copia no se pudo cargar y se dejó todo como estaba: ' + e.message);
+  }
+  fs.rmSync(apartada, { force: true });
+  conexion.registrar('restauracion', { desde: path.basename(origen), comprobantes: v.comprobantes, version: v.version });
+  return { ok: true, comprobantes: v.comprobantes, productos: v.productos, compras: v.compras, ordenes: v.ordenes };
 }
 
 /**
@@ -151,4 +197,4 @@ async function empezarBaseNueva(motivo = 'pruebas') {
   return { archivo, productos: productos.length, comprobantesArchivados: comprobantes };
 }
 
-module.exports = { configurar, carpetaRespaldos, verificarArchivo, crear, siCorresponde, listar, restaurar, empezarBaseNueva };
+module.exports = { configurar, carpetaRespaldos, verificarArchivo, exportarCopia, crear, siCorresponde, listar, restaurar, empezarBaseNueva };

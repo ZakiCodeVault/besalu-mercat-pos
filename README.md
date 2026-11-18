@@ -8,6 +8,11 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 - Una sede, una caja. Sin login.
 - Registra **todas** las ventas (tiquetes, facturas y notas de crédito) y
   **todas** las compras a proveedores, con su inventario.
+- **Órdenes de compra** a proveedores: se piden, se mandan en PDF y la
+  mercadería se recibe (en una o varias entregas) contra la orden; cada
+  recepción suma al inventario y cada venta lo descuenta.
+- **Copia completa** de todo en un solo archivo, que se puede **cargar** en
+  esta u otra computadora, y **exportación de todo a Excel**.
 - Firma cada comprobante (XML 4.4 + firma XAdES-EPES con la llave
   criptográfica) y lo envía a la API de Hacienda en segundo plano. Si no hay
   internet la caja sigue vendiendo y los envía solos al volver la conexión.
@@ -33,15 +38,16 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 6. [Dónde se guardan los datos y respaldos](#dónde-se-guardan-los-datos-y-respaldos)
 7. [Instalar en una caja (Windows)](#instalar-en-una-caja-windows)
 8. [Primer uso](#primer-uso)
-9. [Hacienda: conexión propia](#hacienda-conexión-propia)
-10. [Factura al correo del cliente](#factura-al-correo-del-cliente)
-11. [Trabajar en el código](#trabajar-en-el-código)
-12. [Pruebas](#pruebas)
-13. [Publicar una versión nueva](#publicar-una-versión-nueva)
-14. [Rendimiento](#rendimiento)
-15. [Atajos de teclado](#atajos-de-teclado)
-16. [Seguridad](#seguridad)
-17. [Pendientes](#pendientes)
+9. [Órdenes de compra y entrada de mercadería](#órdenes-de-compra-y-entrada-de-mercadería)
+10. [Hacienda: conexión propia](#hacienda-conexión-propia)
+11. [Factura al correo del cliente](#factura-al-correo-del-cliente)
+12. [Trabajar en el código](#trabajar-en-el-código)
+13. [Pruebas](#pruebas)
+14. [Publicar una versión nueva](#publicar-una-versión-nueva)
+15. [Rendimiento](#rendimiento)
+16. [Atajos de teclado](#atajos-de-teclado)
+17. [Seguridad](#seguridad)
+18. [Pendientes](#pendientes)
 
 ---
 
@@ -51,11 +57,11 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 |---|---|
 | **Caja** (F1) | Escanear o buscar productos y cobrar en efectivo (con cambio), tarjeta o SINPE. Sin cliente emite un **tiquete**; con cliente (identificación + nombre) emite una **factura**. Cada comprobante sale con su **consecutivo** y **clave** de 50 dígitos. |
 | **Ventas** (F2) | Todos los comprobantes emitidos, con su **estado en Hacienda** (pendiente, en validación, aceptado, rechazado). Ver, reimprimir, descargar el **XML firmado** y la **respuesta de Hacienda**, ver si la factura se **envió al correo del cliente** y **reenviarla**, emitir **nota de crédito** (anula la venta y devuelve el inventario) y **reemitir** un comprobante rechazado. Exportar a Excel. |
-| **Compras** (F3) | Registrar las **facturas de proveedores**: a mano o **importando el XML** de la factura electrónica. Suma el inventario, actualiza el costo promedio y guarda el IVA pagado. **Aceptar** (total o parcial) o **rechazar** la factura ante Hacienda con el Mensaje Receptor, y ver su estado (columna *Hacienda*). Anular una compra mal registrada. |
-| **Inventario** (F4) | Productos con CABYS, tarifa de IVA, costo, precio y existencia. **Kárdex** por producto (cada entrada y salida con su documento). Ajustes de inventario con motivo (conteo físico, merma, vencido…). Alertas de stock bajo y vencimientos. |
+| **Compras** (F3) | Registrar las **facturas de proveedores**: a mano o **importando el XML** de la factura electrónica. Suma el inventario, actualiza el costo promedio y guarda el IVA pagado. **Aceptar** (total o parcial) o **rechazar** la factura ante Hacienda con el Mensaje Receptor, y ver su estado (columna *Hacienda*). Anular una compra mal registrada (si parte ya se vendió, avisa antes). **Órdenes de compra** (pestaña aparte): borrador → emitida con número `OC-00001` → recibida en una o varias entregas → cerrada; PDF para el proveedor y *Pedir lo que falta*. Ver [Órdenes de compra](#órdenes-de-compra-y-entrada-de-mercadería). |
+| **Inventario** (F4) | Productos con CABYS, tarifa de IVA, costo, precio y existencia. **Kárdex** por producto (cada entrada y salida con su documento). Ajustes de inventario con motivo (conteo físico, merma, vencido…). Alertas de stock bajo y vencimientos. Lo que viene **en camino** en órdenes de compra y **Pedir lo que falta** (arma la orden con lo que está bajo el mínimo). |
 | **Reportes** (F5) | **IVA a pagar** del período (débito − crédito) y desglose por tarifa. Ventas netas, costo de lo vendido, utilidad, compras. **Entradas y salidas** de inventario. Ventas por día, medios de pago, más vendidos. Exportar ventas, compras e IVA a Excel. |
 | **Cierre** (F6) | Turno de caja: fondo inicial, ventas por medio de pago, arqueo de efectivo (esperado vs. contado) y cierre con **reporte Z**. Al cerrar se hace un respaldo automático. |
-| **Ajustes** (F7) | **Conexión con Hacienda** (ambiente, usuario y contraseña de la API, llave .p12 y PIN), **correo SMTP** para enviar las facturas, datos del negocio emisor (cédula, actividad económica, ubicación, sucursal, terminal), impresión, respaldos y restauración, verificación de integridad, bitácora y actualizaciones. |
+| **Ajustes** (F7) | **Conexión con Hacienda** (ambiente, usuario y contraseña de la API, llave .p12 y PIN), **correo SMTP** para enviar las facturas, datos del negocio emisor (cédula, actividad económica, ubicación, sucursal, terminal), impresión, respaldos y restauración, **copia completa** (exportar y cargar), **exportar todo a Excel**, verificación de integridad, bitácora y actualizaciones. |
 
 ---
 
@@ -97,6 +103,13 @@ alguien abra el archivo con otro programa, SQLite rechaza:
 - Modificar o borrar un Mensaje Receptor, saltarse su consecutivo, tener dos
   mensajes en curso para la misma compra, mandarlo con una clave distinta a la
   de la compra, o aceptar una compra anulada.
+- Cambiar la **existencia** de un producto sin un movimiento de kárdex (ni
+  siquiera la existencia inicial al crearlo).
+- Cambiar una orden de compra ya emitida, borrarla, cambiarle el número,
+  emitirla vacía o con totales que no cuadran, saltarse estados (una cancelada
+  no se reabre) o cancelarla con mercadería recibida.
+- Registrar una recepción contra una orden que no está abierta, de otro
+  proveedor, o con una línea que no es de esa orden.
 
 Además:
 
@@ -123,17 +136,21 @@ besalu-mercat-pos/
 │   │                             filtro de secretos en el registro.
 │   ├── ipc.js                  ← Las operaciones que la interfaz puede pedir.
 │   ├── precarga.js             ← Puente seguro: expone window.BESALU a la interfaz.
-│   ├── exportar.js             ← Archivos CSV para Excel.
+│   ├── exportar.js             ← Archivos CSV y el Excel con todo.
+│   ├── xlsx.js                 ← Arma archivos .xlsx (sin dependencias).
+│   ├── orden-pdf.js            ← Orden de compra en PDF para el proveedor.
 │   ├── datos/                  ← Toda la lógica de datos y reglas fiscales
 │   │   ├── esquema.js          ← Tablas, restricciones y triggers de protección.
 │   │   ├── conexion.js         ← Abrir/cerrar SQLite, ajustes, bitácora, integridad.
 │   │   ├── montos.js           ← IVA por línea, consecutivo, clave, fechas.
 │   │   ├── productos.js        ← Catálogo, ajustes de inventario y kárdex.
 │   │   ├── ventas.js           ← Tiquetes, facturas y notas de crédito.
-│   │   ├── compras.js          ← Facturas de proveedores y anulaciones.
+│   │   ├── compras.js          ← Facturas de proveedores, recepciones y anulaciones.
+│   │   ├── ordenes.js          ← Órdenes de compra: borrador, emitir, avance, cerrar,
+│   │   │                         cancelar, en camino y qué pedir.
 │   │   ├── caja.js             ← Turnos, arqueo y cierre Z.
 │   │   ├── reportes.js         ← IVA, balance, ventas, inventario, alertas.
-│   │   ├── respaldos.js        ← Copias verificadas y restauración.
+│   │   ├── respaldos.js        ← Copias verificadas, copia completa y cargar una copia.
 │   │   └── migracionV1.js      ← Importar productos de la versión 1.
 │   └── hacienda/               ← Conexión propia con Hacienda
 │       ├── catalogos.js        ← Códigos oficiales (tarifas, medios de pago, URLs…).
@@ -155,6 +172,7 @@ besalu-mercat-pos/
 │       ├── utilidades.js       ← Íconos, formato de colones, modales, confirmaciones.
 │       ├── app.js              ← Arranque, navegación y atajos.
 │       ├── caja.js · ventas.js · compras.js · inventario.js
+│       ├── ordenes.js          ← Órdenes de compra: lista, borrador, detalle y recepción.
 │       ├── reportes.js · cierre.js · ajustes.js
 │       ├── hacienda.js         ← Configuración (Hacienda y correo), indicador y estado
 │       │                         por comprobante (incluido el correo al cliente).
@@ -165,6 +183,7 @@ besalu-mercat-pos/
 ├── recursos/                   ← Ícono, imagen y licencia del instalador.
 ├── pruebas/
 │   ├── datos.prueba.js         ← Reglas fiscales, protecciones, respaldos, velocidad.
+│   ├── inventario.prueba.js    ← Órdenes de compra, recepciones, existencias, copias y Excel.
 │   ├── hacienda.prueba.js      ← XML, firma, envío, rechazos, Mensaje Receptor, sin internet,
 │   │                             producción.
 │   ├── correo.prueba.js        ← Factura al correo: adjuntos, PDF, reintentos, TLS.
@@ -211,7 +230,8 @@ IVA, el consecutivo y la clave los calcula el sistema con los datos de la base.
 | `comprobantes` / `comprobante_lineas` | Tiquetes, facturas y notas de crédito con consecutivo, clave, receptor, totales e IVA por línea. Estado en Hacienda, XML firmado y respuesta de Hacienda, el reemplazo de un rechazado y el estado del correo al cliente (columnas `correo_*`, aparte de las fiscales). |
 | `compras` / `compra_lineas` | Facturas de proveedores con número, clave, fecha, subtotal, IVA, total y el XML original. |
 | `mensajes_receptor` | Aceptación o rechazo de cada factura de compra ante Hacienda: consecutivo, condición del IVA, montos tal como en la factura, estado en Hacienda, XML firmado y respuesta. |
-| `movimientos` | Kárdex: cada entrada y salida de inventario con su documento. |
+| `ordenes_compra` / `orden_compra_lineas` | Órdenes a proveedores: número `OC-…`, estado (borrador, emitida, cerrada, cancelada), entrega esperada, productos, cantidades y costos. Lo recibido no se guarda aparte: sale de las compras vigentes ligadas a cada línea (vista `orden_compra_avance`), así que anular una recepción lo devuelve a pendiente solo. |
+| `movimientos` | Kárdex: cada entrada y salida de inventario con su documento. La existencia de cada producto es la suma de sus movimientos. |
 | `secuencias` · `secuencias_receptor` | Último número usado por tipo de comprobante (01, 03, 04) y de mensaje (05, 06, 07). |
 | `turnos` | Turnos de caja con fondo, esperado, contado y diferencia. |
 | `clientes` · `proveedores` | Se guardan solos al facturar o registrar compras. |
@@ -237,6 +257,18 @@ En la carpeta del usuario de Windows, **nunca** en la carpeta de instalación:
   también ahí.
 - **Restaurar**: Ajustes → Respaldos. Antes de restaurar se guarda una copia
   del estado actual.
+- **Copia completa**: Ajustes → Respaldos → *Exportar copia completa…* guarda
+  un solo archivo `.sqlite` con todo (ventas, compras, órdenes, inventario,
+  clientes, proveedores y ajustes) donde usted elija (USB, OneDrive…). Se
+  verifica al terminar.
+- **Cargar una copia**: Ajustes → Respaldos → *Cargar una copia…* (en esta u
+  otra computadora). Antes de cargarla revisa que sea una copia de esta app y
+  de una versión compatible; una copia de una versión anterior se actualiza
+  sola. El estado actual se guarda como `.antes-de-cargar` y, si algo falla,
+  todo queda como estaba.
+- **Exportar todo a Excel**: un `.xlsx` con una hoja por tema (resumen,
+  productos, kárdex, ventas y sus líneas, compras y sus líneas, órdenes de
+  compra, proveedores y clientes), con montos en colones y filtros.
 - Reinstalar o actualizar la app **no borra** los datos.
 
 ---
@@ -268,6 +300,40 @@ de Windows.
 > Si venís de la versión 1, en Ajustes → **Versión anterior** aparece
 > **Importar esos productos** (solo productos; las ventas viejas no se mezclan con la
 > numeración nueva).
+
+---
+
+## Órdenes de compra y entrada de mercadería
+
+El inventario solo cambia con movimientos del kárdex: **entra** con cada
+compra (o recepción de una orden) y **sale** con cada venta; una nota de crédito
+lo devuelve, anular una compra lo saca, y un conteo físico se registra como
+ajuste con motivo.
+
+1. **Pedir**: *Compras → Órdenes de compra → Nueva orden* (o *Pedir lo que
+   falta*, que agrega los productos bajo su mínimo contando lo que ya viene en
+   camino y sugiere pedir hasta el doble del mínimo). Elegir el proveedor,
+   escanear o buscar productos, poner cantidades y costos. Un producto no se
+   puede repetir en la misma orden.
+2. **Borrador**: se guarda y se corrige cuantas veces haga falta; no cuenta como
+   pedido ni tiene número.
+3. **Emitir**: recibe su número (`OC-00001`, `OC-00002`…) y queda fija. Desde el
+   detalle se guarda en **PDF** para mandarla al proveedor. Inventario muestra
+   esas cantidades como **en camino**.
+4. **Recibir mercadería**: abre la factura de compra con lo pendiente ya
+   cargado y el proveedor fijo. Se pone lo que llegó de cada producto (0 si no
+   vino) y se registra: entra al inventario, actualiza el costo promedio y la
+   orden queda *Recibida en parte* o *Recibida*. Se puede recibir en varias
+   entregas; también se puede *Leer XML de la factura* para tomar cantidades y
+   montos exactos. Si llega **más** de lo pedido, pide confirmación. Al
+   importar el XML de un proveedor con órdenes abiertas, pregunta si es la
+   entrega de una de ellas.
+5. **Terminar**: si el resto no va a llegar, *Cerrar con faltante* (con motivo).
+   Si no llegó nada, *Cancelar orden*. Ambas quedan registradas.
+
+Si una recepción se registró mal, se **anula la compra**: sale del inventario y
+lo recibido vuelve a quedar pendiente en la orden. Si parte de esa mercadería ya
+se vendió, avisa qué productos quedarían en negativo y pide confirmar.
 
 ---
 
@@ -498,11 +564,12 @@ donde se esté trabajando, y no se buscan actualizaciones.
 ## Pruebas
 
 ```bash
-npm run prueba            # las cuatro juntas (158 pruebas)
-npm run prueba:datos      # 39 pruebas de reglas fiscales y protecciones
+npm run prueba            # las cinco juntas (198 pruebas)
+npm run prueba:datos      # 40 pruebas de reglas fiscales y protecciones
+npm run prueba:inventario # 24 pruebas de órdenes de compra, existencias y copias
 npm run prueba:hacienda   # 50 pruebas de la conexión con Hacienda
 npm run prueba:correo     # 25 pruebas del envío de facturas por correo
-npm run prueba:app        # 44 pruebas con la app real, de punta a punta
+npm run prueba:app        # 59 pruebas con la app real, de punta a punta
 ```
 
 Todas usan una carpeta temporal y **no tocan** los datos del negocio. Las de
@@ -518,6 +585,19 @@ movimientos es rechazado por la base; notas de crédito; compras duplicadas o co
 fecha futura; montos exactos del XML; el reporte de IVA y el balance; el arqueo;
 la detección y reparación de inventario; respaldos y restauración; y la
 velocidad con 2.000 ventas.
+
+**`prueba:inventario`** comprueba: borrador, emisión con número correlativo y
+que una orden emitida no se puede cambiar ni borrar (ni con SQL directo);
+recepciones parciales, de más (con confirmación), de otro proveedor, con líneas
+o productos que no son de la orden, extras y factura repetida; que anular una
+recepción la devuelve a pendiente y que avisa si quedaría inventario negativo;
+cerrar con faltante y cancelar; *Pedir lo que falta*; que la existencia solo
+cambia con el kárdex; **1 500 operaciones al azar** (compras, ventas, notas de
+crédito, ajustes, órdenes, recepciones y anulaciones) comparadas contra un
+modelo, con la existencia de cada producto igual a la suma de su kárdex; copia
+completa, cargarla, archivo inválido, copia de una versión más nueva o anterior
+y que si falla al abrirse todo queda como estaba; y el Excel con todas sus
+hojas (leído con otro programa).
 
 **`prueba:hacienda`** comprueba: que IVA = base × tarifa en 20 000 montos al
 azar y que el total del XML es lo cobrado; la lectura de la llave y el PIN; que
@@ -556,7 +636,13 @@ comprueba que Hacienda aceptó todo (también el Mensaje Receptor) y que la fact
 llegó sola al correo del cliente (y que **Reenviar por correo** funciona), respalda, **reinicia la app** y comprueba
 que todo quedó guardado e íntegro. También verifica la seguridad de la pantalla:
 sin Node, sin ventanas nuevas, sin conexión a internet, sin navegar a otra página
-y que el sistema solo atiende pedidos de la pantalla del POS.
+y que el sistema solo atiende pedidos de la pantalla del POS. Además recorre las
+**órdenes de compra** desde la pantalla: crear, guardar borrador, emitir, PDF,
+"en camino" en Inventario, recibir en dos entregas (una de más), anular una
+recepción, cerrar con faltante, anular lo ya vendido (aviso de negativo),
+*Pedir lo que falta*, exportar la copia completa y el Excel, y cargar la copia.
+Con `BESALU_CAPTURAS=<carpeta>` guarda capturas de esas pantallas para
+revisarlas.
 
 Las mismas pruebas corren en **Windows** (GitHub Actions) antes de compilar cada
 versión: si alguna falla, no se publica.
@@ -650,3 +736,6 @@ Medido con las pruebas:
 - **Firma de código** (quita el aviso "Editor desconocido" y permite que Windows
   verifique cada actualización): ver [docs/GUIA-VERSIONES.md](docs/GUIA-VERSIONES.md).
 - **Logo real** del negocio para el ícono y el instalador (`recursos/`).
+- **Avisos de SINPE Móvil (BAC)** en la caja para que la cajera confirme el
+  pago: falta un correo de notificación real del banco (`.eml`) y el buzón donde
+  llegan.

@@ -4,20 +4,22 @@
  * El stock solo cambia con movimientos: compras, ventas, notas de crédito
  * y ajustes (con motivo). El kárdex muestra cada uno con su saldo.
  */
-const Inventario = { texto: '', inactivos: false };
+const Inventario = { texto: '', inactivos: false, camino: {} };
 const TIPO_MOV = { inicial: ['Inventario inicial', 'pill--accent'], compra: ['Compra', 'pill--green'], venta: ['Venta', ''], nota_credito: ['Devolución', 'pill--green'], ajuste: ['Ajuste', 'pill--amber'], anulacion_compra: ['Anulación de compra', 'pill--red'] };
 
 async function renderInventario() {
   const root = $('#v-inventario');
-  const [productos, alertas, valor] = await Promise.all([
+  const [productos, alertas, valor, camino] = await Promise.all([
     intentar(() => BESALU.productos.listar({ incluirInactivos: Inventario.inactivos })),
-    intentar(() => BESALU.reportes.alertas()), intentar(() => BESALU.reportes.inventario())]);
+    intentar(() => BESALU.reportes.alertas()), intentar(() => BESALU.reportes.inventario()), intentar(() => BESALU.ordenes.enCamino())]);
   if (!productos) return;
+  Inventario.camino = camino || {};
   root.innerHTML = '';
 
   if (alertas && alertas.bajos.length) root.appendChild(el('div', { class: 'alert red glass' }, [icon('warn', 16), el('div', {}, [
     el('span', { class: 't', text: alertas.bajos.length + ' con inventario bajo' }),
-    el('div', { class: 'lista' }, alertas.bajos.slice(0, 12).map((p) => el('span', { class: 'it', html: p.nombre + ' · <b>' + cantidad(p.stock) + '</b>' })))])]));
+    el('div', { class: 'lista' }, alertas.bajos.slice(0, 12).map((p) => el('span', { class: 'it', text: p.nombre + ' · ' }, el('b', { text: cantidad(p.stock) + (Inventario.camino[p.id] ? ' (+' + cantidad(Inventario.camino[p.id]) + ' en camino)' : '') }))))]),
+    el('button', { class: 'btn btn--ghost btn--sm', style: 'margin-left:auto;align-self:center', onclick: () => editarOrden(null, { sugerir: true }) }, 'Pedir lo que falta')]));
   if (alertas && alertas.porVencer.length) root.appendChild(el('div', { class: 'alert amber glass' }, [icon('clock', 16), el('div', {}, [
     el('span', { class: 't', text: alertas.porVencer.length + ' por vencer o vencidos' }),
     el('div', { class: 'lista' }, alertas.porVencer.slice(0, 12).map((p) => el('span', { class: 'it', html: p.nombre + ' · <b>' + (p.dias < 0 ? 'vencido' : p.dias + ' d') + '</b>' })))])]));
@@ -41,6 +43,7 @@ async function renderInventario() {
       el('div', { class: 'search', style: 'max-width:320px;flex:1' }, [icon('search', 18), buscar]),
       el('label', { class: 'chk' }, [el('input', { type: 'checkbox', checked: Inventario.inactivos, onchange: (e) => { Inventario.inactivos = e.target.checked; renderInventario(); } }), 'Ver inactivos']),
       el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, [
+        el('button', { class: 'btn btn--ghost', onclick: () => editarOrden(null, { sugerir: true }), title: 'Orden de compra con los productos bajo su mínimo' }, [icon('truck', 17), 'Pedir lo que falta']),
         el('button', { class: 'btn btn--accent', onclick: () => modalProducto() }, [icon('plus', 18), 'Agregar producto']),
         el('button', { class: 'btn btn--ghost btn--sm', onclick: () => exportarCsv('inventario') }, [icon('download', 16), 'Excel'])])]),
     el('div', { class: 'tabla-wrap' }, el('table', {}, [
@@ -64,7 +67,8 @@ function filaProducto(p) {
     el('td', { class: 'der', text: money(p.costo) }),
     el('td', { class: 'der', text: money(p.precio) }),
     el('td', { class: 'der', style: 'font-weight:700;color:' + (margen == null ? 'var(--ink-3)' : margen > 0 ? 'var(--pos)' : 'var(--neg)'), text: margen == null ? '—' : (margen > 0 ? '+' : '') + margen + '%' }),
-    el('td', { class: 'der' }, el('span', { class: 'pill ' + (bajo ? 'pill--red' : ''), text: cantidad(p.stock) })),
+    el('td', { class: 'der' }, [el('span', { class: 'pill ' + (bajo ? 'pill--red' : ''), text: cantidad(p.stock) }),
+      Inventario.camino[p.id] ? el('div', { class: 'mini', style: 'color:var(--accent-2)', title: 'Pedido en órdenes de compra emitidas y todavía no recibido', text: '+' + cantidad(Inventario.camino[p.id]) + ' en camino' }) : null]),
     el('td', { class: 'der' }, vence),
     el('td', { class: 'der acciones' }, [
       el('button', { class: 'icon-btn', title: 'Kárdex (entradas y salidas)', onclick: () => modalKardex(p) }, icon('list', 18)),

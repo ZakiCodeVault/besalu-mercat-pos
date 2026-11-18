@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const log = require('electron-log');
 const datos = require('./datos');
+const { fechaLocal } = require('./datos/montos');
 const exportar = require('./exportar');
 const hacienda = require('./hacienda/conector');
 const seguridad = require('./seguridad');
@@ -38,7 +39,8 @@ function manejar(canal, fn) {
  * @param {object} ctx { ventana(), estadoInicio, carpetaDatos }
  */
 function registrar(ctx) {
-  const { conexion, productos, ventas, compras, caja, reportes, respaldos, migracionV1 } = datos;
+  const { conexion, productos, ventas, compras, ordenes, caja, reportes, respaldos, migracionV1 } = datos;
+  const hoy = () => fechaLocal().slice(0, 10);
 
   /* ---- sistema ---- */
   manejar('sistema:estado', () => ({
@@ -81,7 +83,32 @@ function registrar(ctx) {
   manejar('compras:registrar', (c) => compras.registrarCompra(c));
   manejar('compras:listar', (f) => compras.listar(f || {}));
   manejar('compras:obtener', (id) => compras.obtenerPorId(id));
-  manejar('compras:anular', (id, razon) => compras.anular(id, razon));
+  manejar('compras:anular', (id, razon, o) => compras.anular(id, razon, { permitirNegativo: !!(o && o.permitirNegativo) }));
+  manejar('compras:revisarAnulacion', (id) => compras.revisarAnulacion(id));
+
+  /* ---- órdenes de compra ---- */
+  manejar('ordenes:listar', (f) => ordenes.listar(f || {}));
+  manejar('ordenes:obtener', (id) => ordenes.obtenerPorId(id));
+  manejar('ordenes:guardar', (o) => ordenes.guardarBorrador(o || {}));
+  manejar('ordenes:eliminar', (id) => ordenes.eliminarBorrador(id));
+  manejar('ordenes:emitir', (id) => ordenes.emitir(id));
+  manejar('ordenes:cerrar', (id, motivo) => ordenes.cerrar(id, motivo));
+  manejar('ordenes:cancelar', (id, motivo) => ordenes.cancelar(id, motivo));
+  manejar('ordenes:sugerencias', (f) => ordenes.sugerencias(f || {}));
+  manejar('ordenes:enCamino', () => ordenes.enCamino());
+  manejar('ordenes:pdf', async (id) => {
+    const o = ordenes.obtenerPorId(id);
+    if (!o) throw new Error('La orden de compra no existe');
+    if (o.estado === 'borrador') throw new Error('Emita la orden antes de generar el PDF');
+    const r = await dialog.showSaveDialog(ctx.ventana(), {
+      title: 'Guardar orden de compra', defaultPath: path.join(app.getPath('documents'), o.numero_texto + ' ' + o.proveedor_nombre.replace(/[\\/:*?"<>|]/g, '') + '.pdf'),
+      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    });
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, await require('./orden-pdf').generar(o));
+    conexion.registrar('orden_pdf', { orden: o.numero_texto, archivo: r.filePath });
+    return { ruta: r.filePath };
+  });
   // Mensaje Receptor: aceptar o rechazar la factura ante Hacienda (se envía en segundo plano)
   manejar('compras:datosMensaje', (id) => hacienda.datosMensaje(id));
   manejar('compras:responder', (id, o) => hacienda.responderCompra(id, o || {}));
@@ -125,10 +152,18 @@ function registrar(ctx) {
   manejar('respaldos:crear', () => respaldos.crear('manual'));
   manejar('respaldos:listar', () => respaldos.listar());
   manejar('respaldos:restaurar', async (nombre) => { const r = await respaldos.restaurar(nombre); hacienda.reiniciar(); return r; });
+  manejar('respaldos:exportarCopia', async () => {
+    const r = await dialog.showSaveDialog(ctx.ventana(), {
+      title: 'Exportar copia completa', defaultPath: path.join(app.getPath('documents'), 'besalu-copia-' + fechaLocal().slice(0, 16).replace(/[: ]/g, '-') + '.sqlite'),
+      filters: [{ name: 'Copia de Besalú (.sqlite)', extensions: ['sqlite'] }]
+    });
+    if (r.canceled || !r.filePath) return null;
+    return respaldos.exportarCopia(r.filePath);
+  });
   manejar('respaldos:restaurarArchivo', async () => {
     const r = await dialog.showOpenDialog(ctx.ventana(), {
-      title: 'Elegir respaldo para restaurar', properties: ['openFile'],
-      filters: [{ name: 'Respaldo de Besalú (.sqlite)', extensions: ['sqlite'] }]
+      title: 'Cargar una copia', properties: ['openFile'],
+      filters: [{ name: 'Copia de Besalú (.sqlite)', extensions: ['sqlite'] }]
     });
     if (r.canceled || !r.filePaths[0]) return null;
     const restaurado = await respaldos.restaurar(r.filePaths[0]);
@@ -146,10 +181,10 @@ function registrar(ctx) {
   manejar('exportar:csv', async (tipo, a, b) => {
     const generadores = {
       ventas: () => exportar.ventas(a, b), compras: () => exportar.compras(a, b), iva: () => exportar.iva(a, b),
-      inventario: () => exportar.inventario(), kardex: () => exportar.kardex(a)
+      inventario: () => exportar.inventario(), kardex: () => exportar.kardex(a), ordenes: () => exportar.ordenes()
     };
     if (!generadores[tipo]) throw new Error('Tipo de exportación desconocido');
-    const sufijo = tipo === 'inventario' ? new Date().toISOString().slice(0, 10) : (tipo === 'kardex' ? 'producto-' + a : a + '_a_' + b);
+    const sufijo = tipo === 'inventario' || tipo === 'ordenes' ? hoy() : (tipo === 'kardex' ? 'producto-' + a : a + '_a_' + b);
     const r = await dialog.showSaveDialog(ctx.ventana(), {
       title: 'Guardar para Excel', defaultPath: path.join(app.getPath('documents'), 'besalu-' + tipo + '-' + sufijo + '.csv'),
       filters: [{ name: 'Excel (CSV)', extensions: ['csv'] }]
@@ -157,6 +192,17 @@ function registrar(ctx) {
     if (r.canceled || !r.filePath) return null;
     fs.writeFileSync(r.filePath, generadores[tipo](), 'utf8');
     datos.conexion.registrar('exportacion', { tipo, archivo: r.filePath });
+    return { ruta: r.filePath };
+  });
+
+  manejar('exportar:todoExcel', async () => {
+    const r = await dialog.showSaveDialog(ctx.ventana(), {
+      title: 'Exportar todo a Excel', defaultPath: path.join(app.getPath('documents'), 'besalu-todo-' + hoy() + '.xlsx'),
+      filters: [{ name: 'Excel', extensions: ['xlsx'] }]
+    });
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, exportar.todoExcel());
+    conexion.registrar('exportacion', { tipo: 'todo_excel', archivo: r.filePath });
     return { ruta: r.filePath };
   });
 

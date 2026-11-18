@@ -9,14 +9,30 @@
  *  - Una factura importada se acepta (total o parcial) o se rechaza ante Hacienda
  *    con el Mensaje Receptor: eso respalda su IVA como crédito fiscal.
  */
-const Compras = { periodo: 'mes', texto: '', abierta: null };
+const Compras = { periodo: 'mes', texto: '', abierta: null, vista: 'facturas' };
+
+/** Pestañas de la pantalla: facturas de compra (lo que entró) y órdenes de compra (lo pedido). */
+function pestanasCompras() {
+  return el('div', { class: 'segmento', style: 'margin-bottom:14px' }, [['facturas', 'Facturas de compra'], ['ordenes', 'Órdenes de compra']].map(([k, t]) =>
+    el('button', { class: Compras.vista === k ? 'sel' : '', 'data-vista': k, onclick: () => { Compras.vista = k; renderCompras(); } }, t)));
+}
 
 async function renderCompras() {
   const root = $('#v-compras');
+  if (Compras.vista === 'ordenes') {
+    // Se arma aparte y se cambia de una vez: dos refrescos seguidos no duplican nada
+    const cont = el('div');
+    await renderOrdenes(cont);
+    if (Compras.vista !== 'ordenes') return;
+    root.innerHTML = '';
+    root.append(pestanasCompras(), ...cont.childNodes);
+    return;
+  }
   const p = periodo(Compras.periodo);
   const lista = await intentar(() => BESALU.compras.listar({ desde: p.desde, hasta: p.hasta, texto: Compras.texto, limite: 500 }));
-  if (!lista) return;
+  if (!lista || Compras.vista !== 'facturas') return;
   root.innerHTML = '';
+  root.appendChild(pestanasCompras());
   const vigentes = lista.filter((c) => c.estado === 'vigente');
   const suma = (k) => vigentes.reduce((s, c) => s + c[k], 0);
 
@@ -42,7 +58,7 @@ async function renderCompras() {
     tb.appendChild(el('tr', { class: 'clic' + (c.estado === 'anulada' ? ' tachado' : ''), onclick: () => verCompra(c.id) }, [
       el('td', { text: fechaCorta(c.fecha) }),
       el('td', {}, [el('div', { style: 'font-weight:600', text: c.proveedor }), el('div', { class: 'mini', text: c.proveedor_identificacion })]),
-      el('td', { class: 'mini', text: c.numero_documento }),
+      el('td', {}, [el('div', { class: 'mini', text: c.numero_documento }), c.orden_numero ? el('div', { class: 'mini', style: 'color:var(--accent-2);font-weight:600', text: 'OC-' + String(c.orden_numero).padStart(5, '0') }) : null]),
       el('td', { class: 'der mini', text: money(c.impuesto) }),
       el('td', { class: 'der', style: 'font-weight:700', text: money(c.total) }),
       el('td', {}, el('span', { class: 'pill ' + (c.estado === 'anulada' ? 'pill--red' : 'pill--green'), text: c.estado === 'anulada' ? 'Anulada' : 'Vigente' })),
@@ -219,6 +235,8 @@ async function verCompra(id) {
     el('div', { class: 'card-t' }, [el('h2', { text: 'Factura ' + c.numero_documento }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
     el('div', { class: 'mini', style: 'margin-bottom:12px', text: c.proveedor_nombre + ' · ' + c.proveedor_identificacion + ' · ' + fechaCorta(c.fecha) + (c.clave ? ' · Clave ' + c.clave : '') }),
     c.estado === 'anulada' ? el('div', { class: 'note', style: 'margin:0 0 12px', html: '<b>Anulada</b> el ' + fechaHora(c.anulada_en) + ': ' + c.anulada_razon }) : null,
+    c.orden_id ? el('div', { style: 'margin:0 0 12px' }, el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { cerrarModal(); verOrden(c.orden_id); } },
+      [icon('list', 14), 'Recepción de la orden ' + c.orden_texto])) : null,
     el('div', { class: 'tabla-wrap', style: 'border:1px solid var(--line)' }, el('table', {}, [
       el('thead', {}, el('tr', {}, ['Descripción', 'Cant.', 'Costo u.', 'IVA', 'Monto IVA', 'Total'].map((t, i) => el('th', { text: t, class: i ? 'der' : '' })))), tb])),
     el('div', { class: 'totales-compra' }, [
@@ -231,9 +249,21 @@ async function verCompra(id) {
 
 async function anularCompra(c) {
   const motivo = await confirmar('Anular compra', 'Se sacará del inventario lo que entró con la factura ' + c.numero_documento +
-    ' y su IVA dejará de contar como crédito fiscal. Esta acción no se puede deshacer.', { peligro: true, pedirTexto: 'Motivo de la anulación', aceptar: 'Anular compra' });
+    ' y su IVA dejará de contar como crédito fiscal.' + (c.orden_id ? ' Lo recibido vuelve a quedar pendiente en la orden ' + c.orden_texto + '.' : '') +
+    ' Esta acción no se puede deshacer.', { peligro: true, pedirTexto: 'Motivo de la anulación', aceptar: 'Anular compra' });
   if (!motivo) return;
-  const r = await intentar(() => BESALU.compras.anular(c.id, motivo), 'No se pudo anular');
+  // Si parte de esa mercadería ya se vendió, el inventario quedaría negativo: se avisa antes
+  const negativos = await intentar(() => BESALU.compras.revisarAnulacion(c.id));
+  if (!negativos) return;
+  let opciones = {};
+  if (negativos.length) {
+    const lista = negativos.map((x) => x.nombre + ': hay ' + cantidad(x.stock) + ', salen ' + cantidad(x.sale) + ' → quedaría en ' + cantidad(x.quedaria)).join('\n');
+    const seguir = await confirmar('Quedarían existencias negativas', 'Parte de esa mercadería ya se vendió o se movió:\n' + lista +
+      '\n\nSi anula de todos modos, esos productos quedan en negativo hasta que haga un conteo o una nueva compra.', { peligro: true, aceptar: 'Anular de todos modos' });
+    if (!seguir) return;
+    opciones = { permitirNegativo: true };
+  }
+  const r = await intentar(() => BESALU.compras.anular(c.id, motivo, opciones), 'No se pudo anular');
   if (!r) return;
   cerrarModal();
   await App.recargarCatalogo();
@@ -243,16 +273,20 @@ async function anularCompra(c) {
 
 /* ---------------- Formulario de compra ---------------- */
 /**
- * @param {object} borrador datos precargados (desde un XML) o null
+ * @param {object} borrador datos precargados (desde un XML o una orden) o null
+ * @param {object} [orden] orden de compra que se está recibiendo: sus líneas
+ *   pendientes vienen precargadas (modo 'orden') y el proveedor queda fijo.
  */
-async function formularioCompra(borrador) {
+async function formularioCompra(borrador, orden) {
   const proveedores = (await intentar(() => BESALU.compras.proveedores())) || [];
   const b = borrador || { proveedor: { tipo_id: '02' }, fecha: isoDia(new Date()), lineas: [] };
   const estado = { lineas: b.lineas.length ? b.lineas : [lineaVacia()] };
+  let ocupado = false;
 
   const provTipo = selector(TIPOS_ID, b.proveedor.tipo_id || '02');
   const provId = el('input', { value: b.proveedor.identificacion || '', placeholder: 'Cédula del proveedor', list: 'dl-proveedores' });
   const provNombre = el('input', { value: b.proveedor.nombre || '' });
+  if (orden) for (const x of [provTipo, provId, provNombre]) x.disabled = true;   // el proveedor es el de la orden
   const listaProv = el('datalist', { id: 'dl-proveedores' }, proveedores.map((p) => el('option', { value: p.identificacion, text: p.nombre })));
   provId.addEventListener('change', () => { const p = proveedores.find((x) => x.identificacion === provId.value.replace(/\D/g, '')); if (p) { provNombre.value = p.nombre; provTipo.value = p.tipo_id; } });
   const numero = el('input', { value: b.numero_documento || '', placeholder: 'Consecutivo de la factura' });
@@ -285,9 +319,18 @@ async function formularioCompra(borrador) {
   }
 
   function filaLinea(l, i) {
-    const modo = selector([['existente', 'Producto'], ['nuevo', 'Producto nuevo'], ['gasto', 'Gasto']], l.modo);
-    modo.addEventListener('change', () => { l.modo = modo.value; pintarLineas(); });
-    let detalle;
+    let modo, detalle;
+    if (l.modo === 'orden') {
+      // Línea de la orden: el producto no cambia; se indica cuánto llegó (0 = no llegó en esta entrega)
+      modo = el('span', { class: 'pill pill--accent', text: 'Pedido' });
+      const exceso = l.cantidad > l.pendiente + 0.0005;
+      detalle = el('div', {}, [el('div', { style: 'font-weight:600', text: l.descripcion }),
+        el('div', { class: 'mini', style: exceso ? 'color:var(--warn);font-weight:700' : '',
+          text: 'Pedido ' + cantidad(l.pedido) + (l.recibido ? ' · ya llegó ' + cantidad(l.recibido) : '') + ' · falta ' + cantidad(l.pendiente) + (exceso ? ' · llegó de más' : '') })]);
+    } else {
+      modo = selector([['existente', 'Producto'], ['nuevo', 'Producto nuevo'], ['gasto', 'Gasto']], l.modo);
+      modo.addEventListener('change', () => { l.modo = modo.value; pintarLineas(); });
+    }
     if (l.modo === 'existente') {
       const inp = el('input', { list: 'dl-productos', value: l.texto || '', placeholder: 'Código o nombre' });
       inp.addEventListener('change', () => {
@@ -305,7 +348,7 @@ async function formularioCompra(borrador) {
       const pre = el('input', { inputmode: 'decimal', value: n.precio ? aColonesTexto(n.precio) : '', placeholder: 'Precio venta ₡ (con IVA)' });
       cod.oninput = () => (n.codigo = cod.value.trim()); nom.oninput = () => (n.nombre = nom.value.trim()); pre.oninput = () => (n.precio = aCentimos(pre.value));
       detalle = el('div', { class: 'nuevo-prod' }, [el('div', { class: 'g2' }, [cod, pre]), nom, n.cabys ? el('div', { class: 'mini', text: 'CABYS ' + n.cabys }) : null]);
-    } else {
+    } else if (l.modo === 'gasto') {
       const d = el('input', { value: l.descripcion || '', placeholder: 'Descripción del gasto' });
       d.oninput = () => (l.descripcion = d.value);
       detalle = d;
@@ -318,23 +361,56 @@ async function formularioCompra(borrador) {
     const montos = el('td', { class: 'der mini' });
     const pintarMontos = () => { const m = montosLinea(l); montos.innerHTML = ''; montos.append(el('div', { text: money(m.subtotal + m.impuesto) }), el('div', { text: 'IVA ' + money(m.impuesto) })); };
     cant.oninput = () => { l.cantidad = leerNumero(cant.value); l.exacto = false; pintarMontos(); recalcular(); };
+    if (l.modo === 'orden') cant.addEventListener('change', pintarLineas);   // repinta el aviso de "llegó de más"
     costo.oninput = () => { l.costo = aCentimos(costo.value); l.exacto = false; pintarMontos(); recalcular(); };
     tarifa.onchange = () => { l.tarifa = Number(tarifa.value); l.exacto = false; pintarMontos(); recalcular(); };
     pintarMontos();
     return el('tr', { class: l.revisar ? 'fila-revisar' : '' }, [
       el('td', {}, modo), el('td', { style: 'min-width:240px' }, detalle), el('td', {}, cant), el('td', {}, costo), el('td', {}, tarifa), montos,
-      el('td', {}, el('button', { class: 'icon-btn icon-btn--danger', title: 'Quitar línea', onclick: () => { estado.lineas.splice(i, 1); if (!estado.lineas.length) estado.lineas.push(lineaVacia()); pintarLineas(); } }, icon('trash', 16)))
+      el('td', {}, el('button', { class: 'icon-btn icon-btn--danger', title: l.modo === 'orden' ? 'No llegó en esta entrega' : 'Quitar línea',
+        onclick: () => { estado.lineas.splice(i, 1); if (!estado.lineas.length) estado.lineas.push(lineaVacia()); pintarLineas(); } }, icon('trash', 16)))
     ]);
   }
 
-  async function registrar() {
+  /** Recepción: lee el XML del proveedor y pone sus cantidades y montos sobre las líneas de la orden. */
+  function leerXmlRecepcion() {
+    elegirXml((texto) => {
+      const x = leerXmlCompra(texto);
+      if (x.proveedor.identificacion.replace(/\D/g, '') !== String(orden.proveedor_identificacion).replace(/\D/g, '')) {
+        toast('Esa factura es de otro proveedor', 'err', x.proveedor.nombre + ' · ' + x.proveedor.identificacion); return;
+      }
+      Object.assign(b, { numero_documento: x.numero_documento, clave: x.clave, fecha: x.fecha, otros_cargos: x.otros_cargos, total_xml: x.total_xml, xml_original: x.xml_original });
+      numero.value = x.numero_documento; claveDoc.value = x.clave; fecha.value = x.fecha;
+      otros.value = x.otros_cargos ? aColonesTexto(x.otros_cargos) : '';
+      const r = fusionarXmlConOrden(estado.lineas, x.lineas);
+      estado.lineas = r.lineas;
+      pintarLineas();
+      toast('Factura leída', 'ok', plural(r.ligadas, 'línea de la orden', 'líneas de la orden') + (r.extra ? ' · ' + plural(r.extra, 'línea extra', 'líneas extra') + ' para revisar' : ''));
+    });
+  }
+
+  async function registrar(e) {
+    if (ocupado) return;
     const lineas = [];
+    const excesos = [];
     for (const [i, l] of estado.lineas.entries()) {
+      if (l.modo === 'orden') {
+        if (!(l.cantidad >= 0)) { toast('Línea ' + (i + 1) + ': cantidad inválida', 'err'); return; }
+        if (l.cantidad === 0) continue;   // no llegó en esta entrega
+        if (l.cantidad > l.pendiente + 0.0005) excesos.push(l.descripcion + ': llegaron ' + cantidad(l.cantidad) + ', faltaban ' + cantidad(l.pendiente));
+        const base = { orden_linea_id: l.orden_linea_id, producto_id: l.producto_id, cantidad: l.cantidad, costo_unitario: l.costo, tarifa_iva: l.tarifa };
+        if (l.exacto) Object.assign(base, { subtotal: l.subtotal, impuesto: l.impuesto });
+        lineas.push(base);
+        continue;
+      }
       if (!(l.cantidad > 0)) { toast('Línea ' + (i + 1) + ': cantidad inválida', 'err'); return; }
       const base = { cantidad: l.cantidad, costo_unitario: l.costo, tarifa_iva: l.tarifa };
       if (l.exacto) Object.assign(base, { subtotal: l.subtotal, impuesto: l.impuesto });
       if (l.modo === 'existente') {
-        if (!l.producto_id) { toast('Línea ' + (i + 1) + ': elija el producto', 'err'); return; }
+        if (!l.producto_id) {
+          if (orden && !l.texto && estado.lineas.length > 1) continue;   // línea extra que quedó en blanco
+          toast('Línea ' + (i + 1) + ': elija el producto', 'err'); return;
+        }
         lineas.push(Object.assign(base, { producto_id: l.producto_id }));
       } else if (l.modo === 'nuevo') {
         const n = l.nuevo;
@@ -346,33 +422,75 @@ async function formularioCompra(borrador) {
         lineas.push(Object.assign(base, { descripcion: l.descripcion }));
       }
     }
+    if (orden && !lineas.some((l) => l.orden_linea_id)) { toast('No hay nada recibido de la orden', 'err', 'Ponga la cantidad que llegó de cada producto'); return; }
+    if (!lineas.length) { toast('Agregue al menos una línea', 'err'); return; }
+    if (excesos.length && !(await confirmar('Llegó más de lo pedido', excesos.join('\n') + '\n\nSe registrará lo que llegó y todo entra al inventario.', { aceptar: 'Registrar de todos modos' }))) return;
     const datos = {
       proveedor: { tipo_id: provTipo.value, identificacion: provId.value, nombre: provNombre.value, correo: (b.proveedor || {}).correo || '' },
       numero_documento: numero.value, fecha: fecha.value, clave: claveDoc.value, otros_cargos: aCentimos(otros.value),
       notas: notas.value, xml_original: b.xml_original || null, lineas
     };
+    if (orden) Object.assign(datos, { orden_id: orden.id, permitir_exceso: excesos.length > 0 });
+    const boton = e && e.currentTarget;
+    ocupado = true; if (boton) boton.disabled = true;
     const r = await intentar(() => BESALU.compras.registrar(datos), 'No se pudo registrar la compra');
+    ocupado = false; if (boton) boton.disabled = false;
     if (!r) return;
     cerrarModal();
     await App.recargarCatalogo();
-    toast('Compra registrada', 'ok', r.proveedor_nombre + ' · ' + money(r.total) + ' · IVA ' + money(r.impuesto));
+    toast(orden ? 'Mercadería recibida' : 'Compra registrada', 'ok', r.proveedor_nombre + ' · ' + money(r.total) + ' · IVA ' + money(r.impuesto));
     if (App.vista === 'compras') renderCompras();
+    if (orden) verOrden(orden.id);
   }
 
-  abrirModal(el('div', { class: 'modal ancho' }, [
-    el('div', { class: 'card-t' }, [el('h2', { text: b.xml_original ? 'Revisar factura importada' : 'Registrar factura de compra' }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
+  const titulo = orden ? 'Recibir mercadería · ' + orden.numero_texto : b.xml_original ? 'Revisar factura importada' : 'Registrar factura de compra';
+  abrirModal(el('div', { class: 'modal ancho', 'data-recepcion': orden ? String(orden.id) : null }, [
+    el('div', { class: 'card-t' }, [el('h2', { text: titulo }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
+    orden ? el('div', { class: 'note', style: 'margin:0 0 12px', text: 'Ponga la cantidad que llegó de cada producto (0 si no vino en esta entrega). Lo que falte queda pendiente en la orden para la próxima entrega.' }) : null,
     listaProv, listaProd,
     el('div', { class: 'g3' }, [campo('Tipo', provTipo), campo('Identificación del proveedor', provId), campo('Nombre del proveedor', provNombre)]),
     el('div', { class: 'g3' }, [campo('Número de factura', numero), campo('Fecha de la factura', fecha), campo('Clave (si es electrónica)', claveDoc)]),
     el('div', { class: 'tabla-wrap lineas-compra' }, el('table', {}, [
-      el('thead', {}, el('tr', {}, ['Tipo', 'Producto / descripción', 'Cantidad', 'Costo u. sin IVA', 'IVA', 'Total', ''].map((t) => el('th', { text: t })))), cuerpo])),
-    el('button', { class: 'btn btn--ghost btn--sm', style: 'margin-top:10px', onclick: () => { estado.lineas.push(lineaVacia()); pintarLineas(); } }, [icon('plus', 15), 'Agregar línea']),
+      el('thead', {}, el('tr', {}, ['Tipo', 'Producto / descripción', orden ? 'Llegó' : 'Cantidad', 'Costo u. sin IVA', 'IVA', 'Total', ''].map((t) => el('th', { text: t })))), cuerpo])),
+    el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px' }, [
+      el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { estado.lineas.push(lineaVacia()); pintarLineas(); } }, [icon('plus', 15), orden ? 'Agregar algo que no estaba en la orden' : 'Agregar línea']),
+      orden && !b.xml_original ? el('button', { class: 'btn btn--ghost btn--sm', onclick: leerXmlRecepcion }, [icon('upload', 15), 'Leer XML de la factura']) : null]),
     el('div', { class: 'g2', style: 'margin-top:14px' }, [campo('Otros cargos ₡ (flete, servicio…)', otros), campo('Notas', notas)]),
     totales,
-    el('div', { class: 'modal-acc' }, [el('button', { class: 'btn btn--ghost', onclick: cerrarModal }, 'Cancelar'), el('button', { class: 'btn btn--pos', onclick: registrar }, [icon('check', 17), 'Registrar compra'])])
+    el('div', { class: 'modal-acc' }, [el('button', { class: 'btn btn--ghost', onclick: cerrarModal }, 'Cancelar'),
+      el('button', { class: 'btn btn--pos', onclick: registrar }, [icon('check', 17), orden ? 'Registrar recepción' : 'Registrar compra'])])
   ]));
   otros.addEventListener('input', recalcular);
   pintarLineas();
+}
+
+/**
+ * Pone las líneas del XML sobre las líneas pendientes de una orden: las del
+ * mismo producto toman la cantidad y los montos exactos de la factura; las
+ * de la orden que no vienen en la factura quedan en 0 (no llegaron) y lo que
+ * la factura trae de más queda como línea extra para revisar.
+ */
+function fusionarXmlConOrden(lineasOrden, lineasXml) {
+  const deOrden = lineasOrden.filter((l) => l.modo === 'orden').map((l) => Object.assign(l, { cantidad: 0, exacto: false, revisar: false }));
+  const extra = [];
+  let ligadas = 0;
+  for (const x of lineasXml) {
+    const l = x.producto_id && deOrden.find((o) => o.producto_id === x.producto_id && !o.usada);
+    if (l) {
+      Object.assign(l, { cantidad: x.cantidad, costo: x.costo, tarifa: x.tarifa, subtotal: x.subtotal, impuesto: x.impuesto, exacto: true, usada: true });
+      ligadas++;
+    } else extra.push(Object.assign(x, { revisar: true }));
+  }
+  for (const l of deOrden) delete l.usada;
+  return { lineas: deOrden.concat(extra), ligadas, extra: extra.length };
+}
+
+/** Líneas pendientes de una orden, listas para el formulario de recepción. */
+function lineasDeOrden(o) {
+  return o.lineas.filter((l) => l.pendiente > 0).map((l) => ({
+    modo: 'orden', orden_linea_id: l.id, producto_id: l.producto_id, pedido: l.cantidad, recibido: l.recibido, pendiente: l.pendiente,
+    nuevo: {}, descripcion: l.descripcion, cantidad: l.pendiente, costo: l.costo_unitario, tarifa: l.tarifa_iva, exacto: false
+  }));
 }
 
 function lineaVacia() { return { modo: 'existente', producto_id: null, texto: '', nuevo: {}, descripcion: '', cantidad: 1, costo: 0, tarifa: 13, exacto: false }; }
@@ -384,14 +502,15 @@ function montosLinea(l) {
 }
 
 /* ---------------- Importar XML de factura electrónica ---------------- */
-function importarXml() {
+/** Abre el selector de archivos y entrega el texto del XML elegido. */
+function elegirXml(alLeer) {
   const archivo = el('input', { type: 'file', accept: '.xml,text/xml', style: 'display:none' });
   archivo.addEventListener('change', () => {
     const f = archivo.files[0];
     if (!f) return;
     const lector = new FileReader();
     lector.onload = () => {
-      try { formularioCompra(leerXmlCompra(String(lector.result))); }
+      try { alLeer(String(lector.result)); }
       catch (e) { toast('No se pudo leer el XML', 'err', e.message); }
     };
     lector.readAsText(f, 'utf-8');
@@ -399,6 +518,34 @@ function importarXml() {
   document.body.appendChild(archivo);
   archivo.click();
   setTimeout(() => archivo.remove(), 60000);
+}
+
+function importarXml() {
+  elegirXml((texto) => { const x = leerXmlCompra(texto); ofrecerOrden(x); });
+}
+
+/** Si el proveedor de la factura tiene órdenes abiertas, pregunta si la factura es la recepción de una. */
+async function ofrecerOrden(x) {
+  const ident = x.proveedor.identificacion.replace(/\D/g, '');
+  const lista = ident ? await BESALU.ordenes.listar({ texto: ident, limite: 50 }).catch(() => []) : [];
+  const abiertas = lista.filter((o) => o.proveedor_identificacion === ident && (o.estado_visible === 'emitida' || o.estado_visible === 'parcial'));
+  if (!abiertas.length) { formularioCompra(x); return; }
+  const elegir = async (id) => {
+    cerrarModal();
+    if (!id) { formularioCompra(x); return; }
+    const o = await intentar(() => BESALU.ordenes.obtener(id));
+    if (!o) return;
+    const r = fusionarXmlConOrden(lineasDeOrden(o), x.lineas);
+    formularioCompra(Object.assign({}, x, { lineas: r.lineas }), o);
+    if (r.extra) toast(plural(r.extra, 'línea de la factura no está', 'líneas de la factura no están') + ' en la orden', 'ok', 'Revíselas antes de registrar');
+  };
+  abrirModal(el('div', { class: 'modal narrow' }, [
+    el('div', { class: 'card-t' }, [el('h2', { text: '¿Es la entrega de una orden?' }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
+    el('div', { class: 'mini', style: 'margin-bottom:12px', text: x.proveedor.nombre + ' tiene ' + plural(abiertas.length, 'orden abierta', 'órdenes abiertas') + '. Si esta factura es la entrega, ligarla descuenta lo recibido de lo pendiente.' }),
+    ...abiertas.map((o) => el('button', { class: 'btn btn--ghost', style: 'width:100%;justify-content:space-between;margin-bottom:8px', onclick: () => elegir(o.id) }, [
+      el('span', { style: 'font-weight:700', text: o.numero_texto }), el('span', { class: 'mini', text: fechaCorta(String(o.emitida_en).slice(0, 10)) + ' · ' + o.avance + ' % recibido · ' + money(o.total) })])),
+    el('div', { class: 'modal-acc' }, [el('button', { class: 'btn btn--ghost', onclick: () => elegir(null) }, 'No, registrarla sin orden')])
+  ]));
 }
 
 /** Lee una factura electrónica de Costa Rica (v4.3 / v4.4) y arma el borrador de compra. */

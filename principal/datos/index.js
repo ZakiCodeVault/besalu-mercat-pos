@@ -4,7 +4,8 @@
  *   conexion   abrir/cerrar, ajustes, bitácora, verificación de integridad
  *   productos  catálogo, ajustes de inventario, kárdex
  *   ventas     tiquetes, facturas y notas de crédito
- *   compras    facturas de compra (entradas) y proveedores
+ *   compras    facturas de compra (entradas), recepciones y proveedores
+ *   ordenes    órdenes de compra a proveedores
  *   caja       turnos: apertura, arqueo y cierre
  *   reportes   IVA a pagar, balance, ventas, alertas
  *   respaldos  copias de seguridad verificadas
@@ -16,6 +17,7 @@ module.exports = {
   productos: require('./productos'),
   ventas: require('./ventas'),
   compras: require('./compras'),
+  ordenes: require('./ordenes'),
   caja: require('./caja'),
   reportes: require('./reportes'),
   respaldos: require('./respaldos'),

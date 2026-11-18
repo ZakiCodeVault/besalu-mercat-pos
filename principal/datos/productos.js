@@ -80,8 +80,8 @@ function actualizar(id, datos) {
 }
 
 /**
- * Elimina un producto que nunca se usó. Si ya tiene ventas, compras o
- * movimientos, se DESACTIVA (no se puede borrar su historia).
+ * Elimina un producto que nunca se usó. Si ya tiene ventas, compras, órdenes
+ * de compra o movimientos, se DESACTIVA (no se puede borrar su historia).
  */
 function eliminar(id) {
   const d = obtener();
@@ -90,7 +90,8 @@ function eliminar(id) {
   const usado = d.prepare(`SELECT
       (SELECT count(*) FROM movimientos WHERE producto_id = ?) +
       (SELECT count(*) FROM comprobante_lineas WHERE producto_id = ?) +
-      (SELECT count(*) FROM compra_lineas WHERE producto_id = ?) AS n`).get(id, id, id).n;
+      (SELECT count(*) FROM compra_lineas WHERE producto_id = ?) +
+      (SELECT count(*) FROM orden_compra_lineas WHERE producto_id = ?) AS n`).get(id, id, id, id).n;
   if (usado === 0) {
     d.prepare('DELETE FROM productos WHERE id = ?').run(id);
     registrar('producto_eliminado', { id, codigo: p.codigo, nombre: p.nombre });

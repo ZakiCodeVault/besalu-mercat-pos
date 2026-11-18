@@ -88,6 +88,19 @@ async function esperarLista() {
   }
   return false;
 }
+/** Con BESALU_CAPTURAS=<carpeta> guarda imágenes de la pantalla para revisarla a ojo. */
+async function captura(nombre) {
+  const dir = process.env.BESALU_CAPTURAS;
+  if (!dir) return;
+  await js(`document.querySelectorAll('.toast').forEach((t) => t.remove()); true`);   // los avisos taparían la pantalla
+  await esperar(350);
+  fs.writeFileSync(path.join(dir, nombre + '.png'), (await ventana.webContents.capturePage()).toPNG());
+}
+/** Espera a que una condición de la pantalla se cumpla (o se rinde y sigue: la verificación dirá qué falló). */
+async function hasta(codigo, intentos = 50) {
+  for (let i = 0; i < intentos; i++) { try { if (await js(codigo)) return true; } catch (e) {} await esperar(100); }
+  return false;
+}
 async function recargar() {
   const cargada = new Promise((r) => ventana.webContents.once('did-finish-load', r));
   const t = Date.now();
@@ -320,6 +333,128 @@ async function correr() {
   verificar('Reabre y todo persiste (3 comprobantes, 1 compra, 2 productos)', r1.ok && persist.comp === 3 && persist.compras === 1 && persist.prods === 2 && !persist.turno && persist.cedula === '3101123456', r1.ms + ' ms');
   verificar('Integridad verificada (archivo, kárdex, consecutivos)', persist.integ);
   verificar('La interfaz no tiene acceso directo a la base (solo operaciones permitidas)', await js("typeof BESALU.sql === 'undefined' && typeof require === 'undefined' && !('exec' in BESALU)"));
+
+  // ---- Órdenes de compra: pedir, recibir en partes, anular una recepción, cerrar con faltante ----
+  const dialogo = require('electron').dialog;
+  const dialogoGuardar = dialogo.showSaveDialog, dialogoAbrir = dialogo.showOpenDialog;
+  const existencias = () => js(`(async () => { const ps = await BESALU.productos.listar(); return { leche: ps.find(p => p.codigo === '7441001100118').stock, galletas: ps.find(p => p.codigo === '7441099900011').stock }; })()`);
+  const tituloModal = (t) => hasta(`!!__modal() && __modal().querySelector('h2').textContent === ${JSON.stringify(t)}`);
+  await js(`go('compras'); true`); await esperar(400);
+  await js(`document.querySelector('#v-compras [data-vista="ordenes"]').click(); true`);
+  verificar('Compras tiene la pestaña "Órdenes de compra"', await hasta(`document.querySelector('#v-compras tbody').textContent.includes('Todavía no hay órdenes')`));
+  await js(`__boton('Nueva orden').click(); true`); await tituloModal('Nueva orden de compra');
+  await js(`const m = __modal(); __escribir(__campo('Identificación del proveedor', m), '3101999999');
+    const b = m.querySelector('input[list="dl-productos-oc"]');
+    for (const c of ['7441001100118', '7441099900011', '7441001100118']) { b.value = c; __enter(b); } true`); await esperar(200);
+  await captura('2-orden-nueva');
+  const oc0 = await js(`({ nombre: __campo('Nombre del proveedor').value, filas: __modal().querySelectorAll('.lineas-compra tbody tr').length })`);
+  await js(`__escribir(__modal().querySelectorAll('.lineas-compra tbody tr')[0].querySelector('td:nth-child(2) input'), '24'); true`); await esperar(100);
+  await js(`__escribir(__modal().querySelectorAll('.lineas-compra tbody tr')[1].querySelector('td:nth-child(2) input'), '10'); true`); await esperar(100);
+  verificar('Nueva orden: el proveedor se completa solo y no repite productos', oc0.nombre === 'Distribuidora Central S.A.' && oc0.filas === 2, oc0.nombre);
+  await js(`__boton('Guardar borrador', __modal()).click(); true`); await esperar(500);
+  const bor = await js(`(async () => ({ o: (await BESALU.ordenes.listar({}))[0], camino: await BESALU.ordenes.enCamino() }))()`);
+  verificar('Guardar borrador (sin número y sin contar como pedido)', bor.o && bor.o.estado === 'borrador' && bor.o.numero === null && bor.o.lineas === 2 && Object.keys(bor.camino).length === 0);
+  const idOc = bor.o.id;
+  await js(`editarOrden(${idOc}); true`); await tituloModal('Borrador de orden de compra');
+  await js(`__boton('Emitir orden', __modal()).click(); true`); await tituloModal('Emitir orden de compra');
+  await js(`__boton('Emitir orden', __modal()).click(); true`); await tituloModal('Orden de compra OC-00001');
+  await captura('3-orden-emitida');
+  const det = await js(`({ pill: __modal().querySelector('.card-t .pill').textContent, botones: [...__modal().querySelectorAll('.modal-acc button')].map(b => b.textContent) })`);
+  verificar('Emitir: recibe el número OC-00001 y queda lista para recibir', det.pill === 'Emitida' && det.botones.includes('Recibir mercadería') && det.botones.includes('Cancelar orden'), det.botones.join(' · '));
+  const rutaPdf = path.join(carpeta, 'orden.pdf');
+  dialogo.showSaveDialog = async () => ({ canceled: false, filePath: rutaPdf });
+  await js(`__boton('PDF para el proveedor', __modal()).click(); true`);
+  for (let i = 0; i < 80 && !fs.existsSync(rutaPdf); i++) await esperar(100);
+  verificar('PDF de la orden para el proveedor', fs.existsSync(rutaPdf) && fs.readFileSync(rutaPdf).subarray(0, 5).toString() === '%PDF-', fs.existsSync(rutaPdf) ? Math.round(fs.statSync(rutaPdf).size / 1024) + ' KB' : '');
+  await js(`while (hayModal()) cerrarModal(); go('inventario'); true`);
+  await hasta(`document.querySelector('#v-inventario tbody').textContent.includes('en camino')`);
+  await captura('4-inventario-en-camino');
+  const camino = await js(`[...document.querySelectorAll('#v-inventario tbody tr')].map(t => t.textContent).filter(t => t.includes('en camino'))`);
+  verificar('Inventario muestra lo que viene en camino', camino.length === 2 && camino.some((t) => t.includes('+24 en camino')) && camino.some((t) => t.includes('+10 en camino')));
+
+  const stock0 = await existencias();
+  await js(`go('compras'); verOrden(${idOc}); true`); await tituloModal('Orden de compra OC-00001');
+  await js(`__boton('Recibir mercadería', __modal()).click(); true`); await hasta(`!!document.querySelector('#modalRoot [data-recepcion]')`);
+  await captura('5-recepcion');
+  const rec0 = await js(`({ titulo: __modal().querySelector('h2').textContent, fijo: __campo('Identificación del proveedor').disabled, filas: __modal().querySelectorAll('.lineas-compra tbody tr').length })`);
+  await js(`__escribir(__campo('Número de factura'), 'F-100'); __escribir(__modal().querySelectorAll('.lineas-compra tbody tr')[1].querySelector('td:nth-child(3) input'), '0'); true`); await esperar(150);
+  await js(`__boton('Registrar recepción', __modal()).click(); true`); await tituloModal('Orden de compra OC-00001');
+  const stock1 = await existencias();
+  const det1 = await js(`__modal().querySelector('.card-t .pill').textContent`);
+  await captura('6-orden-parcial');
+  verificar('Recibir en partes: entra solo lo que llegó y la orden queda "Recibida en parte"', rec0.titulo === 'Recibir mercadería · OC-00001' && rec0.fijo && rec0.filas === 2 &&
+    stock1.leche === stock0.leche + 24 && stock1.galletas === stock0.galletas && det1 === 'Recibida en parte', 'leche ' + stock0.leche + ' → ' + stock1.leche + ' · ' + det1);
+  await js(`__boton('Recibir mercadería', __modal()).click(); true`); await hasta(`!!document.querySelector('#modalRoot [data-recepcion]')`);
+  const filas2 = await js(`__modal().querySelectorAll('.lineas-compra tbody tr').length`);
+  await js(`__escribir(__campo('Número de factura'), 'F-101'); __escribir(__modal().querySelector('.lineas-compra tbody tr td:nth-child(3) input'), '12'); true`); await esperar(150);
+  const avisoExceso = await js(`__modal().querySelector('.lineas-compra tbody').textContent.includes('llegó de más')`);
+  await js(`__boton('Registrar recepción', __modal()).click(); true`); await tituloModal('Llegó más de lo pedido');
+  await js(`__boton('Registrar de todos modos', __modal()).click(); true`); await tituloModal('Orden de compra OC-00001');
+  const stock2 = await existencias();
+  const det2 = await js(`__modal().querySelector('.card-t .pill').textContent`);
+  verificar('Si llega de más, pide confirmación y la orden queda "Recibida"', filas2 === 1 && avisoExceso && det2 === 'Recibida' && stock2.galletas === stock0.galletas + 12, 'galletas ' + stock0.galletas + ' → ' + stock2.galletas);
+
+  await js(`[...__modal().querySelectorAll('.hseccion .clic')].find(d => d.textContent.includes('F-101')).click(); true`); await hasta(`!!document.querySelector('#modalRoot [data-compra]')`);
+  const ligada = await js(`!!__boton('Recepción de la orden OC-00001', __modal())`);
+  await captura('7-compra-de-orden');
+  await js(`__boton('Anular compra', __modal()).click(); true`); await tituloModal('Anular compra');
+  await js(`__escribir(__modal().querySelector('input'), 'Mercadería devuelta'); __boton('Anular compra', __modal()).click(); true`); await hasta(`!document.querySelector('#modalRoot .modal')`);
+  const stock3 = await existencias();
+  const det3 = await js(`(async () => { const o = await BESALU.ordenes.obtener(${idOc}); return { estado: o.estado_visible, falta: o.lineas.map(l => l.pendiente) }; })()`);
+  verificar('Anular una recepción la saca del inventario y la vuelve a dejar pendiente', ligada && det3.estado === 'parcial' && det3.falta[1] === 10 && stock3.galletas === stock0.galletas, det3.estado + ' · faltan ' + det3.falta.join('/'));
+
+  await js(`verOrden(${idOc}); true`); await tituloModal('Orden de compra OC-00001');
+  await js(`__boton('Cerrar con faltante', __modal()).click(); true`); await tituloModal('Cerrar con faltante');
+  const textoCierre = await js(`__modal().textContent`);
+  await js(`__escribir(__modal().querySelector('input'), 'El proveedor no tiene galletas'); __boton('Cerrar orden', __modal()).click(); true`); await hasta(`!document.querySelector('#modalRoot .modal')`);
+  const det4 = await js(`(async () => ({ o: await BESALU.ordenes.obtener(${idOc}), camino: await BESALU.ordenes.enCamino() }))()`);
+  if (process.env.BESALU_CAPTURAS) { await js(`Ordenes.filtro = 'todas'; renderCompras(); true`); await captura('1-lista-ordenes'); await js(`Ordenes.filtro = 'abiertas'; true`); }
+  verificar('Cerrar con faltante: queda registrada y deja de contar como pedido', det4.o.estado === 'cerrada' && det4.o.motivo === 'El proveedor no tiene galletas' &&
+    textoCierre.includes('Galletas') && Object.keys(det4.camino).length === 0);
+
+  // Anular una recepción cuando parte ya se vendió: avisa que quedaría negativo
+  await js(`(async () => { const p = App.catalogo.find(x => x.codigo === '7441001100118'); await BESALU.productos.ajustar(p.id, 5, 'Conteo físico'); await App.recargarCatalogo(); })(); true`); await esperar(300);
+  await js(`(async () => { const l = await BESALU.compras.listar({}); await verCompra(l.find(c => c.numero_documento === 'F-100').id); })(); true`); await hasta(`!!document.querySelector('#modalRoot [data-compra]')`);
+  await js(`__boton('Anular compra', __modal()).click(); true`); await tituloModal('Anular compra');
+  await js(`__escribir(__modal().querySelector('input'), 'Factura equivocada'); __boton('Anular compra', __modal()).click(); true`);
+  await tituloModal('Quedarían existencias negativas');
+  const avisoNeg = await js(`__modal().textContent`);
+  await captura('8-aviso-negativo');
+  await js(`__boton('Anular de todos modos', __modal()).click(); true`); await hasta(`!document.querySelector('#modalRoot .modal')`);
+  const stock5 = await existencias();
+  verificar('Anular lo que ya se vendió pide confirmación (quedaría negativo)', avisoNeg.includes('-19') && stock5.leche === -19, 'leche ' + stock5.leche);
+
+  await js(`go('inventario'); true`); await hasta(`!!__boton('Pedir lo que falta')`);
+  await js(`__boton('Pedir lo que falta').click(); true`);
+  await hasta(`!!__modal() && __modal().querySelector('h2').textContent === 'Nueva orden de compra' && __modal().querySelectorAll('.lineas-compra tbody tr td input').length > 0`);
+  const sug = await js(`(async () => ({ filas: __modal().querySelectorAll('.lineas-compra tbody tr').length, sug: (await BESALU.ordenes.sugerencias()).length, texto: __modal().querySelector('.lineas-compra tbody').textContent }))()`);
+  verificar('"Pedir lo que falta" arma la orden con lo que está bajo el mínimo', sug.sug >= 1 && sug.filas === sug.sug && sug.texto.includes('Leche'), sug.filas + ' producto(s)');
+  await js('while (hayModal()) cerrarModal(); true');
+
+  // ---- Copia completa, Excel y cargar una copia ----
+  await js(`go('ajustes'); true`); await hasta(`!!__boton('Exportar copia completa')`);
+  if (process.env.BESALU_CAPTURAS) await js(`__boton('Exportar copia completa').scrollIntoView({ block: 'center' }); true`);
+  await captura('9-ajustes-copias');
+  const rutaCopia = path.join(carpeta, 'copia completa.sqlite'), rutaExcel = path.join(carpeta, 'todo.xlsx');
+  dialogo.showSaveDialog = async () => ({ canceled: false, filePath: rutaCopia });
+  await js(`__boton('Exportar copia completa').click(); true`);
+  for (let i = 0; i < 80 && !fs.existsSync(rutaCopia); i++) await esperar(100);
+  const vCopia = require('../principal/datos/respaldos').verificarArchivo(rutaCopia);
+  verificar('Exportar copia completa (un archivo verificado con todo)', vCopia.ok && vCopia.ordenes === 1 && vCopia.compras === 3, vCopia.ok ? vCopia.compras + ' compras · ' + vCopia.ordenes + ' orden · ' + vCopia.movimientos + ' movimientos' : vCopia.detalle);
+  dialogo.showSaveDialog = async () => ({ canceled: false, filePath: rutaExcel });
+  await js(`__boton('Exportar todo a Excel').click(); true`);
+  for (let i = 0; i < 80 && !fs.existsSync(rutaExcel); i++) await esperar(100);
+  verificar('Exportar todo a Excel', fs.existsSync(rutaExcel) && fs.readFileSync(rutaExcel).subarray(0, 2).toString() === 'PK', fs.existsSync(rutaExcel) ? Math.round(fs.statSync(rutaExcel).size / 1024) + ' KB' : '');
+  await js(`(async () => { await BESALU.ordenes.guardar({ proveedor: { tipo_id: '02', identificacion: '3101999999', nombre: 'Distribuidora Central S.A.' }, lineas: [{ producto_id: App.catalogo[0].id, cantidad: 1 }] }); })(); true`); await esperar(300);
+  const antesDeCargar = await js(`(async () => (await BESALU.ordenes.listar({})).length)()`);
+  dialogo.showOpenDialog = async () => ({ canceled: false, filePaths: [rutaCopia] });
+  await js(`__boton('Cargar una copia').click(); true`); await tituloModal('Cargar una copia');
+  await js(`__escribir(__modal().querySelector('input'), 'RESTAURAR'); __boton('Elegir archivo', __modal()).click(); true`);
+  await hasta(`document.body.textContent.includes('Copia cargada')`);
+  const cargada = await js(`(async () => ({ ordenes: (await BESALU.ordenes.listar({})).length, compras: (await BESALU.compras.listar({})).length, integ: (await BESALU.sistema.verificar()).ok }))()`);
+  verificar('Cargar una copia: todo vuelve a como estaba en la copia', antesDeCargar === 2 && cargada.ordenes === 1 && cargada.compras === 3 && cargada.integ, antesDeCargar + ' → ' + cargada.ordenes + ' órdenes');
+  dialogo.showSaveDialog = dialogoGuardar; dialogo.showOpenDialog = dialogoAbrir;
+  await js('while (hayModal()) cerrarModal(); true');
 
   // ---- Seguridad de la pantalla ----
   const aislada = await js("({ process: typeof process, buffer: typeof Buffer, global: typeof global, abrir: window.open('https://example.com') === null })");

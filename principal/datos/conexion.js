@@ -81,6 +81,7 @@ function rutaArchivo() { return ruta; }
 
 function cerrar() {
   if (db) {
+    try { db.pragma('optimize'); } catch (e) {}                 // estadísticas al día para que las consultas sigan rápidas
     try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (e) {}
     db.close();
   }
@@ -156,6 +157,8 @@ function verificarIntegridad() {
     const n = d.prepare('SELECT count(*) AS n, coalesce(max(numero), 0) AS mx FROM mensajes_receptor WHERE tipo = ?').get(s.tipo);
     if (n.n !== s.ultimo || n.mx !== s.ultimo) problemas.push('Consecutivo de mensajes ' + s.tipo + ': faltan números (' + n.n + ' de ' + s.ultimo + ')');
   }
+  const oc = d.prepare('SELECT count(*) AS n, coalesce(max(numero), 0) AS mx FROM ordenes_compra WHERE numero IS NOT NULL').get();
+  if (oc.n !== oc.mx) problemas.push('Órdenes de compra: faltan números (' + oc.n + ' de ' + oc.mx + ')');
   return { ok: problemas.length === 0, problemas, revisado: fechaLocal() };
 }
 

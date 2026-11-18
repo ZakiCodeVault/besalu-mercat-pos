@@ -37,9 +37,14 @@ contextBridge.exposeInMainWorld('BESALU', {
   },
   compras: {
     registrar: c('compras:registrar'), listar: c('compras:listar'), obtener: c('compras:obtener'),
-    anular: c('compras:anular'), proveedores: c('proveedores:listar'),
+    anular: c('compras:anular'), revisarAnulacion: c('compras:revisarAnulacion'), proveedores: c('proveedores:listar'),
     datosMensaje: c('compras:datosMensaje'), responder: c('compras:responder'),
     reintentarMensaje: c('compras:reintentarMensaje'), guardarXmlMensaje: c('compras:guardarXmlMensaje')
+  },
+  ordenes: {
+    listar: c('ordenes:listar'), obtener: c('ordenes:obtener'), guardar: c('ordenes:guardar'), eliminar: c('ordenes:eliminar'),
+    emitir: c('ordenes:emitir'), cerrar: c('ordenes:cerrar'), cancelar: c('ordenes:cancelar'),
+    sugerencias: c('ordenes:sugerencias'), enCamino: c('ordenes:enCamino'), pdf: c('ordenes:pdf')
   },
   caja: {
     actual: c('caja:actual'), abrir: c('caja:abrir'), resumen: c('caja:resumen'),
@@ -52,9 +57,10 @@ contextBridge.exposeInMainWorld('BESALU', {
   respaldos: {
     crear: c('respaldos:crear'), listar: c('respaldos:listar'), restaurar: c('respaldos:restaurar'),
     restaurarArchivo: c('respaldos:restaurarArchivo'), elegirCarpeta: c('respaldos:elegirCarpeta'),
-    abrirCarpeta: c('respaldos:abrirCarpeta')
+    abrirCarpeta: c('respaldos:abrirCarpeta'), exportarCopia: c('respaldos:exportarCopia')
   },
   exportar: (tipo, a, b) => llamar('exportar:csv', tipo, a, b),
+  exportarTodo: c('exportar:todoExcel'),
   hacienda: {
     estado: c('hacienda:estado'), elegirLlave: c('hacienda:elegirLlave'), guardar: c('hacienda:guardar'),
     probar: c('hacienda:probar'), procesar: c('hacienda:procesar'), reintentar: c('hacienda:reintentar'),
