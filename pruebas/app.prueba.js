@@ -97,8 +97,11 @@ async function captura(nombre) {
   fs.writeFileSync(path.join(dir, nombre + '.png'), (await ventana.webContents.capturePage()).toPNG());
 }
 /** Espera a que una condición de la pantalla se cumpla (o se rinde y sigue: la verificación dirá qué falló). */
-async function hasta(codigo, intentos = 50) {
-  for (let i = 0; i < intentos; i++) { try { if (await js(codigo)) return true; } catch (e) {} await esperar(100); }
+async function hasta(codigo, intentos = 80) {
+  // La condición se evalúa dentro de la página y sus errores se atrapan ahí mismo: mientras la
+  // pantalla se dibuja, un elemento todavía no existe y eso no es un error de la app
+  const seguro = `(async () => { try { return !!(await (${codigo})); } catch (e) { return false; } })()`;
+  for (let i = 0; i < intentos; i++) { try { if (await js(seguro)) return true; } catch (e) {} await esperar(100); }
   return false;
 }
 async function recargar() {
@@ -117,11 +120,13 @@ async function correr() {
   // Electron 35+: los datos vienen en el evento (level: 'error'); antes, como argumentos
   ventana.webContents.on('console-message', (e, nivel, mensaje) => {
     const esError = e && e.level !== undefined ? e.level === 'error' : nivel >= 3;
-    if (esError) erroresConsola.push((e && e.message) || mensaje);
+    // Con el archivo y la línea: si falla en otra máquina se sabe de dónde vino
+    const donde = (e && e.sourceId) ? ' @ ' + String(e.sourceId).split('/').pop() + ':' + e.lineNumber : '';
+    if (esError) erroresConsola.push(((e && e.message) || mensaje) + donde);
   });
   await ventana.webContents.executeJavaScript("console.error('__control__'); true");   // la escucha sí detecta errores
   await esperar(100);
-  verificar('La escucha de errores de consola funciona', erroresConsola.includes('__control__'));
+  verificar('La escucha de errores de consola funciona', erroresConsola.some((m) => m.startsWith('__control__')));
   erroresConsola.length = 0;
   console.log('\nPrueba completa (app real) · datos temporales en ' + carpeta + '\n');
 
