@@ -229,7 +229,8 @@ function enCamino() {
 /**
  * Productos por pedir: los que, contando lo que ya viene en camino, quedan
  * bajo su mínimo. Sugiere pedir hasta el doble del mínimo.
- * @param {object} [f] { proveedor_id } solo los que se le compraron por última vez a ese proveedor (o nunca se compraron)
+ * @param {object} [f] { proveedor_id } solo los de la lista de ese proveedor (o, si un producto no está en
+ *   la lista de nadie, los que se le compraron por última vez a él o nunca se compraron)
  */
 function sugerencias({ proveedor_id } = {}) {
   const minimoDefecto = Number(leerAjustes().stockMin) || 0;
@@ -239,6 +240,9 @@ function sugerencias({ proveedor_id } = {}) {
     SELECT c.proveedor_id, cl.costo_unitario, c.fecha FROM compra_lineas cl JOIN compras c ON c.id = cl.compra_id
     WHERE cl.producto_id = ? AND c.estado = 'vigente' ORDER BY c.fecha DESC, c.id DESC LIMIT 1`);
   const nombreProv = d.prepare('SELECT nombre FROM proveedores WHERE id = ?');
+  // Con proveedor: lo de su lista (con su costo), o lo que no está en la lista de nadie y se le compró a él o nunca se compró
+  const deLista = proveedor_id ? new Map(d.prepare('SELECT producto_id, costo FROM proveedor_productos WHERE proveedor_id = ?').all(Number(proveedor_id)).map((r) => [r.producto_id, r.costo])) : null;
+  const enAlgunaLista = d.prepare('SELECT 1 FROM proveedor_productos WHERE producto_id = ? LIMIT 1');
   const salida = [];
   for (const p of productos.listar()) {
     const minimo = p.stock_minimo > 0 ? p.stock_minimo : minimoDefecto;
@@ -247,11 +251,11 @@ function sugerencias({ proveedor_id } = {}) {
     const disponible = redondear3(p.stock + enCam);
     if (disponible >= minimo) continue;
     const u = ultimo.get(p.id);
-    if (proveedor_id && u && u.proveedor_id !== Number(proveedor_id)) continue;
+    if (proveedor_id && !deLista.has(p.id) && (enAlgunaLista.get(p.id) || (u && u.proveedor_id !== Number(proveedor_id)))) continue;
     salida.push({
       producto_id: p.id, codigo: p.codigo, nombre: p.nombre, stock: p.stock, minimo, en_camino: enCam,
       sugerido: Math.max(1, Math.ceil(minimo * 2 - disponible)),
-      costo: u ? u.costo_unitario : p.costo, tarifa_iva: p.tarifa_iva,
+      costo: deLista && deLista.has(p.id) ? deLista.get(p.id) : u ? u.costo_unitario : p.costo, tarifa_iva: p.tarifa_iva,
       ultimo_proveedor: u ? (nombreProv.get(u.proveedor_id) || {}).nombre : null
     });
   }

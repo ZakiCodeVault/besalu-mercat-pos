@@ -20,6 +20,7 @@ const { obtener, registrar, leerAjustes } = require('./conexion');
 const { validarTarifa, validarCantidad, lineaCompra, consecutivo, fechaIso, fechaLocal } = require('./montos');
 const productos = require('./productos');
 const { motivoNoAceptable } = require('../hacienda/receptor');   // solo lee el XML del proveedor
+const proveedores = require('./proveedores');
 
 function entero(v, campo) {
   const n = Number(v == null ? 0 : v);
@@ -34,8 +35,9 @@ function guardarProveedor(d, p) {
   if (!nombre) throw new Error('Falta el nombre del proveedor');
   d.prepare(`INSERT INTO proveedores(tipo_id, identificacion, nombre, correo, telefono)
              VALUES(@tipo_id, @identificacion, @nombre, @correo, @telefono)
-             ON CONFLICT(identificacion) DO UPDATE SET nombre = excluded.nombre,
-               correo = CASE WHEN excluded.correo <> '' THEN excluded.correo ELSE proveedores.correo END`)
+             ON CONFLICT(identificacion) DO UPDATE SET nombre = excluded.nombre, activo = 1,
+               correo = CASE WHEN excluded.correo <> '' THEN excluded.correo ELSE proveedores.correo END,
+               telefono = CASE WHEN proveedores.telefono = '' THEN excluded.telefono ELSE proveedores.telefono END`)
     .run({ tipo_id: p.tipo_id || '02', identificacion, nombre, correo: String(p.correo || ''), telefono: String(p.telefono || '') });
   return d.prepare('SELECT * FROM proveedores WHERE identificacion = ?').get(identificacion);
 }
@@ -49,7 +51,9 @@ function guardarProveedor(d, p) {
  *   permitir_exceso? true para aceptar más de lo pendiente (el proveedor envió de más),
  *   lineas: [{ producto_id | nuevo_producto:{codigo,nombre,precio,tarifa_iva,cabys?},
  *              orden_linea_id?, descripcion?, cantidad, costo_unitario (céntimos sin IVA), tarifa_iva,
- *              subtotal?, impuesto?  (si vienen del XML se respetan) }]
+ *              subtotal?, impuesto?  (si vienen del XML se respetan),
+ *              precio_venta?  nuevo precio de venta del producto (céntimos, con IVA),
+ *              codigo_proveedor?  el código que usa el proveedor para ese producto (se guarda en su lista) }]
  * }
  */
 function registrarCompra(c) {
@@ -84,6 +88,8 @@ function registrarCompra(c) {
     const lineas = [];
     const avance = orden ? new Map(d.prepare('SELECT * FROM orden_compra_avance WHERE orden_id = ?').all(orden.id).map((a) => [a.orden_linea_id, a])) : null;
     const porLineaOrden = new Map();   // lo que entra en ESTA factura por cada línea de la orden
+    const preciosNuevos = new Map();   // producto → nuevo precio de venta (se cambia en la misma transacción)
+    const codigosProveedor = new Map();   // producto → código del proveedor (de su factura electrónica)
     let n = 0;
     for (const l of c.lineas) {
       let productoId = l.producto_id ? Number(l.producto_id) : null;
@@ -111,6 +117,12 @@ function registrarCompra(c) {
       }
       const desc = String(l.descripcion || (productoId ? productos.obtenerPorId(productoId).nombre : '')).trim();
       if (!desc) throw new Error('Falta la descripción de la línea ' + (n + 1));
+      if (l.precio_venta != null && l.precio_venta !== '' && productoId) {
+        const precio = Number(l.precio_venta);
+        if (!Number.isInteger(precio) || precio <= 0) throw new Error('Línea ' + (n + 1) + ': el precio de venta no es válido');
+        preciosNuevos.set(productoId, precio);
+      }
+      if (l.codigo_proveedor && productoId) codigosProveedor.set(productoId, String(l.codigo_proveedor).trim().slice(0, 40));
       lineas.push(Object.assign({ linea: ++n, producto_id: productoId, orden_linea_id: ordenLineaId, descripcion: desc, cantidad, costo_unitario: costo, tarifa_iva: tarifa }, m));
       if (ordenLineaId) porLineaOrden.set(ordenLineaId, Math.round(((porLineaOrden.get(ordenLineaId) || 0) + cantidad) * 1000) / 1000);
     }
@@ -153,7 +165,16 @@ function registrarCompra(c) {
           : l.costo_unitario;
         actCosto.run(nuevoCosto, ahora, p.id);
         insM.run(p.id, ahora, l.cantidad, l.costo_unitario, compraId, 'Factura ' + numero + ' · ' + prov.nombre + (orden ? ' · ' + numeroOrden(orden.numero) : ''));
+        proveedores.aprender(d, prov.id, p.id, l.costo_unitario, fecha, codigosProveedor.get(p.id));   // queda en la lista del proveedor con este costo
       }
+    }
+    // Precios de venta cambiados al recibir (el precio no es dato fiscal: queda en la bitácora)
+    const actPrecio = d.prepare('UPDATE productos SET precio = ?, actualizado_en = ? WHERE id = ?');
+    for (const [pid, precio] of preciosNuevos) {
+      const p = productos.obtenerPorId(pid);
+      if (p.precio === precio) continue;
+      actPrecio.run(precio, ahora, pid);
+      registrar('precio_cambiado', { producto: p.codigo, nombre: p.nombre, antes: p.precio, ahora: precio, compra: compraId });
     }
     registrar('compra', { id: compraId, proveedor: prov.nombre, numero, total: subtotal + impuesto + otros, iva: impuesto,
       orden: orden ? numeroOrden(orden.numero) : undefined, exceso: orden && c.permitir_exceso ? true : undefined });

@@ -11,6 +11,7 @@ const PANTALLAS = [
   { v: 'ventas', ic: 'history', t: 'Ventas', tecla: 'F2', titulo: 'Ventas emitidas', render: () => renderVentas() },
   { v: 'compras', ic: 'truck', t: 'Compras', tecla: 'F3', titulo: 'Compras (entradas)', render: () => renderCompras() },
   { v: 'inventario', ic: 'box', t: 'Inventario', tecla: 'F4', titulo: 'Inventario', render: () => renderInventario() },
+  { v: 'etiquetas', ic: 'tag', t: 'Etiquetas', tecla: 'F8', titulo: 'Etiquetas', render: () => renderEtiquetas() },
   { v: 'reportes', ic: 'chart', t: 'Reportes', tecla: 'F5', titulo: 'Reportes e IVA', render: () => renderReportes() },
   { v: 'cierre', ic: 'wallet', t: 'Cierre', tecla: 'F6', titulo: 'Cierre de caja', render: () => renderCierre() },
   { v: 'ajustes', ic: 'sliders', t: 'Ajustes', tecla: 'F7', titulo: 'Ajustes', render: () => renderAjustes() }

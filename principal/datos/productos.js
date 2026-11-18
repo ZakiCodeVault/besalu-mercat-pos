@@ -6,6 +6,7 @@
  */
 const { obtener, registrar } = require('./conexion');
 const { validarTarifa, fechaLocal } = require('./montos');
+const marcas = require('./marcas');
 
 /** Los montos llegan SIEMPRE en céntimos enteros (la interfaz convierte ₡ -> céntimos). */
 function centimos(v, campo) {
@@ -14,18 +15,20 @@ function centimos(v, campo) {
   return n;
 }
 
-const CAMPOS = 'id, codigo, nombre, cabys, unidad, tarifa_iva, precio, costo, stock, stock_minimo, vence, activo';
+const CAMPOS = `p.id, p.codigo, p.nombre, p.cabys, p.unidad, p.tarifa_iva, p.precio, p.costo, p.stock, p.stock_minimo, p.vence, p.activo,
+  p.sku, p.marca_id, coalesce(m.nombre, '') AS marca, (m.logo IS NOT NULL) AS marca_logo`;
+const DESDE = 'productos p LEFT JOIN marcas m ON m.id = p.marca_id';
 
 function listar({ incluirInactivos = false } = {}) {
-  return obtener().prepare(`SELECT ${CAMPOS} FROM productos ${incluirInactivos ? '' : 'WHERE activo = 1'} ORDER BY nombre COLLATE NOCASE`).all();
+  return obtener().prepare(`SELECT ${CAMPOS} FROM ${DESDE} ${incluirInactivos ? '' : 'WHERE p.activo = 1'} ORDER BY p.nombre COLLATE NOCASE`).all();
 }
 
 function obtenerPorId(id) {
-  return obtener().prepare(`SELECT ${CAMPOS} FROM productos WHERE id = ?`).get(id);
+  return obtener().prepare(`SELECT ${CAMPOS} FROM ${DESDE} WHERE p.id = ?`).get(id);
 }
 
 function buscarPorCodigo(codigo) {
-  return obtener().prepare(`SELECT ${CAMPOS} FROM productos WHERE codigo = ?`).get(String(codigo).trim());
+  return obtener().prepare(`SELECT ${CAMPOS} FROM ${DESDE} WHERE p.codigo = ?`).get(String(codigo).trim());
 }
 
 function normalizar(p) {
@@ -35,8 +38,10 @@ function normalizar(p) {
   if (!nombre) throw new Error('El nombre del producto es obligatorio');
   const cabys = String(p.cabys || '').replace(/\D/g, '');
   if (cabys && cabys.length !== 13) throw new Error('El código CABYS debe tener 13 dígitos');
+  const sku = String(p.sku == null ? '' : p.sku).trim();
+  if (sku.length > 40) throw new Error('El SKU tiene máximo 40 caracteres');
   return {
-    codigo, nombre, cabys,
+    codigo, nombre, cabys, sku,
     unidad: String(p.unidad || 'Unid').trim() || 'Unid',
     tarifa_iva: validarTarifa(p.tarifa_iva == null ? 13 : p.tarifa_iva),
     precio: centimos(p.precio, 'precio'),
@@ -46,13 +51,21 @@ function normalizar(p) {
   };
 }
 
+/** La marca llega por nombre (se crea si es nueva); vacío = sin marca. */
+function marcaDe(datos, actual) {
+  if ('marca' in datos) return marcas.obtenerOCrear(datos.marca);
+  if ('marca_id' in datos) return datos.marca_id ? Number(datos.marca_id) : null;
+  return actual ? actual.marca_id : null;
+}
+
 /** Crea un producto nuevo. Si trae stock inicial, se registra como movimiento. */
 function crear(datos, { conBitacora = true } = {}) {
   const d = obtener();
   const p = normalizar(datos);
   return d.transaction(() => {
-    const r = d.prepare(`INSERT INTO productos(codigo, nombre, cabys, unidad, tarifa_iva, precio, costo, stock_minimo, vence)
-                         VALUES(@codigo, @nombre, @cabys, @unidad, @tarifa_iva, @precio, @costo, @stock_minimo, @vence)`).run(p);
+    p.marca_id = marcaDe(datos, null);
+    const r = d.prepare(`INSERT INTO productos(codigo, nombre, cabys, unidad, tarifa_iva, precio, costo, stock_minimo, vence, sku, marca_id)
+                         VALUES(@codigo, @nombre, @cabys, @unidad, @tarifa_iva, @precio, @costo, @stock_minimo, @vence, @sku, @marca_id)`).run(p);
     const id = Number(r.lastInsertRowid);
     const inicial = Math.round(Number(datos.stock_inicial || 0) * 1000) / 1000;
     if (inicial > 0) {
@@ -70,11 +83,14 @@ function actualizar(id, datos) {
   const actual = obtenerPorId(id);
   if (!actual) throw new Error('El producto no existe');
   const p = normalizar(Object.assign({}, actual, datos));
-  d.prepare(`UPDATE productos SET codigo=@codigo, nombre=@nombre, cabys=@cabys, unidad=@unidad, tarifa_iva=@tarifa_iva,
-             precio=@precio, costo=@costo, stock_minimo=@stock_minimo, vence=@vence, actualizado_en=@ahora WHERE id=@id`)
-    .run(Object.assign(p, { id, ahora: fechaLocal() }));
+  d.transaction(() => {
+    p.marca_id = marcaDe(datos, actual);
+    d.prepare(`UPDATE productos SET codigo=@codigo, nombre=@nombre, cabys=@cabys, unidad=@unidad, tarifa_iva=@tarifa_iva,
+               precio=@precio, costo=@costo, stock_minimo=@stock_minimo, vence=@vence, sku=@sku, marca_id=@marca_id, actualizado_en=@ahora WHERE id=@id`)
+      .run(Object.assign(p, { id, ahora: fechaLocal() }));
+  })();
   const cambios = {};
-  for (const k of ['codigo', 'nombre', 'precio', 'tarifa_iva', 'costo']) if (actual[k] !== p[k]) cambios[k] = [actual[k], p[k]];
+  for (const k of ['codigo', 'nombre', 'precio', 'tarifa_iva', 'costo', 'sku', 'marca_id']) if (actual[k] !== p[k]) cambios[k] = [actual[k], p[k]];
   if (Object.keys(cambios).length) registrar('producto_editado', { id, cambios });
   return obtenerPorId(id);
 }
@@ -93,7 +109,10 @@ function eliminar(id) {
       (SELECT count(*) FROM compra_lineas WHERE producto_id = ?) +
       (SELECT count(*) FROM orden_compra_lineas WHERE producto_id = ?) AS n`).get(id, id, id, id).n;
   if (usado === 0) {
-    d.prepare('DELETE FROM productos WHERE id = ?').run(id);
+    d.transaction(() => {
+      d.prepare('DELETE FROM proveedor_productos WHERE producto_id = ?').run(id);   // sale de la lista de sus proveedores
+      d.prepare('DELETE FROM productos WHERE id = ?').run(id);
+    })();
     registrar('producto_eliminado', { id, codigo: p.codigo, nombre: p.nombre });
     return { eliminado: true };
   }

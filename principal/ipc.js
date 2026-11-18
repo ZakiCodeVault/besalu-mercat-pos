@@ -14,10 +14,13 @@ const exportar = require('./exportar');
 const hacienda = require('./hacienda/conector');
 const seguridad = require('./seguridad');
 const correo = require('./hacienda/correo');
+const etiquetas = require('./etiquetas');
 
 function amigable(e) {
   const m = String((e && e.message) || e);
   if (m.includes('UNIQUE constraint failed: productos.codigo')) return 'Ya existe un producto con ese código';
+  if (m.includes('UNIQUE constraint failed: productos.sku')) return 'Ya hay otro producto con ese SKU';
+  if (m.includes('UNIQUE constraint failed: marcas.nombre')) return 'Ya existe una marca con ese nombre';
   if (m.includes('UNIQUE constraint failed: proveedores')) return 'Ya existe un proveedor con esa identificación';
   if (m.includes('UNIQUE constraint failed: compras')) return 'Esta factura de compra ya fue registrada';
   if (m.includes('FOREIGN KEY constraint failed')) return 'No se puede: hay registros que dependen de este';
@@ -39,7 +42,7 @@ function manejar(canal, fn) {
  * @param {object} ctx { ventana(), estadoInicio, carpetaDatos }
  */
 function registrar(ctx) {
-  const { conexion, productos, ventas, compras, ordenes, caja, reportes, respaldos, migracionV1 } = datos;
+  const { conexion, productos, marcas, ventas, compras, proveedores, ordenes, caja, reportes, respaldos, migracionV1 } = datos;
   const hoy = () => fechaLocal().slice(0, 10);
 
   /* ---- sistema ---- */
@@ -126,7 +129,14 @@ function registrar(ctx) {
     fs.writeFileSync(r.filePath, contenido, 'utf8');
     return { ruta: r.filePath };
   });
-  manejar('proveedores:listar', () => compras.listarProveedores());
+  manejar('marcas:listar', () => marcas.listar());
+  manejar('marcas:guardar', (f) => marcas.guardar(f || {}));
+  manejar('marcas:logo', (id) => marcas.logo(id));
+  manejar('marcas:eliminar', (id) => marcas.eliminar(id));
+  manejar('proveedores:listar', (f) => proveedores.listar(f || {}));
+  manejar('proveedores:obtener', (id) => proveedores.obtenerPorId(id));
+  manejar('proveedores:guardar', (f) => proveedores.guardar(f || {}));
+  manejar('proveedores:eliminar', (id) => proveedores.eliminar(id));
 
   /* ---- caja ---- */
   manejar('caja:actual', () => caja.actual());
@@ -205,6 +215,14 @@ function registrar(ctx) {
     conexion.registrar('exportacion', { tipo: 'todo_excel', archivo: r.filePath });
     return { ruta: r.filePath };
   });
+
+  /* ---- Etiquetas (SAT TT448-2) ---- */
+  const impresorasWindows = async () => (await ctx.ventana().webContents.getPrintersAsync())
+    .map((p) => ({ nombre: p.name, descripcion: p.displayName || p.description || '', predeterminada: !!p.isDefault }));
+  manejar('etiquetas:config', () => etiquetas.leer());
+  manejar('etiquetas:guardarConfig', (c) => etiquetas.guardar(c || {}));
+  manejar('etiquetas:impresoras', () => impresorasWindows());
+  manejar('etiquetas:imprimir', (t) => etiquetas.imprimir(t, async () => (await impresorasWindows()).map((p) => p.nombre)));
 
   /* ---- Hacienda ---- */
   manejar('hacienda:estado', () => hacienda.estado());

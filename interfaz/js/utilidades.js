@@ -11,6 +11,7 @@ const SVG = {
   receipt: '<path d="M6 3H18V19L15.8 20.6 13.9 19 12 20.6 10.1 19 8.2 20.6 6 19Z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="11.5" x2="15" y2="11.5"/><line x1="9" y1="15" x2="13" y2="15"/>',
   history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><polyline points="3 4 3 9 8 9"/><polyline points="12 7.5 12 12 15.5 14"/>',
   box: '<path d="M12 3L20.5 7.5V16.5L12 21 3.5 16.5V7.5L12 3Z"/><path d="M3.5 7.5L12 12 20.5 7.5"/><line x1="12" y1="12" x2="12" y2="21"/>',
+  tag: '<path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1 1 0 0 1 0 1.4l-7.3 7.3a1 1 0 0 1-1.4 0Z"/><circle cx="8" cy="8" r="1.6"/>',
   truck: '<path d="M3 6h11v10H3Z"/><path d="M14 9h4l3 3.5V16h-7"/><circle cx="7" cy="17.5" r="1.7"/><circle cx="17" cy="17.5" r="1.7"/>',
   chart: '<line x1="4" y1="20" x2="20.5" y2="20"/><rect x="5.6" y="11" width="3.2" height="9"/><rect x="10.4" y="7" width="3.2" height="13"/><rect x="15.2" y="14" width="3.2" height="6"/>',
   wallet: '<rect x="3" y="6" width="18" height="13" rx="2.4"/><path d="M3 9.5h18"/><circle cx="16.5" cy="13.5" r="1.3" fill="currentColor" stroke="none"/>',

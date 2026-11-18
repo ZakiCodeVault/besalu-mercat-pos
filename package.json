@@ -1,7 +1,7 @@
 {
   "name": "besalu-mercat-pos",
   "productName": "Besalu Mercat POS",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Sistema de facturación y punto de venta de Besalú Mercat (local, Windows, SQLite)",
   "author": "Besalu Mercat",
   "license": "UNLICENSED",
@@ -10,9 +10,10 @@
   "scripts": {
     "iniciar": "electron .",
     "start": "electron .",
-    "prueba": "npm run prueba:datos && npm run prueba:inventario && npm run prueba:hacienda && npm run prueba:correo && npm run prueba:app",
+    "prueba": "npm run prueba:datos && npm run prueba:inventario && npm run prueba:etiquetas && npm run prueba:hacienda && npm run prueba:correo && npm run prueba:app",
     "prueba:datos": "electron pruebas/datos.prueba.js",
     "prueba:inventario": "electron pruebas/inventario.prueba.js",
+    "prueba:etiquetas": "electron pruebas/etiquetas.prueba.js",
     "prueba:hacienda": "electron pruebas/hacienda.prueba.js",
     "prueba:correo": "electron pruebas/correo.prueba.js",
     "prueba:app": "electron pruebas/app.prueba.js",

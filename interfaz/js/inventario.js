@@ -24,12 +24,13 @@ async function renderInventario() {
     el('span', { class: 't', text: alertas.porVencer.length + ' por vencer o vencidos' }),
     el('div', { class: 'lista' }, alertas.porVencer.slice(0, 12).map((p) => el('span', { class: 'it', html: p.nombre + ' · <b>' + (p.dias < 0 ? 'vencido' : p.dias + ' d') + '</b>' })))])]));
 
-  const buscar = el('input', { placeholder: 'Buscar producto, código o CABYS…', value: Inventario.texto, style: 'padding-left:40px' });
+  const buscar = el('input', { placeholder: 'Buscar producto, código, SKU, marca o CABYS…', value: Inventario.texto, style: 'padding-left:40px' });
   const tb = el('tbody');
   const pintar = () => {
     const t = Inventario.texto.toLowerCase();
     tb.innerHTML = '';
-    const lista = productos.filter((p) => !t || p.nombre.toLowerCase().includes(t) || p.codigo.includes(t) || p.cabys.includes(t));
+    const lista = productos.filter((p) => !t || p.nombre.toLowerCase().includes(t) || p.codigo.includes(t) || p.cabys.includes(t) ||
+      (p.sku || '').toLowerCase().includes(t) || (p.marca || '').toLowerCase().includes(t));
     if (!lista.length) tb.appendChild(el('tr', {}, el('td', { colspan: 8, class: 'mini', style: 'text-align:center;padding:30px', text: productos.length ? 'Sin resultados.' : 'Todavía no hay productos. Agregalos con "Agregar producto" o registrando una compra.' })));
     for (const p of lista) tb.appendChild(filaProducto(p));
   };
@@ -61,7 +62,7 @@ function filaProducto(p) {
   if (d !== null && d < 0) vence = el('span', { class: 'pill pill--red', text: 'Vencido' });
   else if (d !== null && d <= App.ajustes.venceDias) vence = el('span', { class: 'pill pill--amber', text: d + ' d' });
   return el('tr', { class: p.activo ? '' : 'tachado' }, [
-    el('td', {}, [el('div', { style: 'font-weight:600', text: p.nombre }), el('div', { class: 'mini' }, [p.codigo + (p.cabys ? ' · CABYS ' + p.cabys : ''),
+    el('td', {}, [el('div', { style: 'font-weight:600', text: p.nombre }), el('div', { class: 'mini' }, [p.codigo + (p.sku ? ' · SKU ' + p.sku : '') + (p.marca ? ' · ' + p.marca : '') + (p.cabys ? ' · CABYS ' + p.cabys : ''),
       App.hacienda && App.hacienda.activo && !/^\d{13}$/.test(p.cabys || '') ? el('span', { class: 'pill pill--red', style: 'margin-left:6px', text: 'Sin CABYS: no se puede vender' }) : (p.cabys ? '' : ' · sin CABYS')])]),
     el('td', { class: 'der' }, el('span', { class: 'pill ' + (p.tarifa_iva === 13 ? '' : 'pill--accent'), text: p.tarifa_iva ? p.tarifa_iva + '%' : 'Exento' })),
     el('td', { class: 'der', text: money(p.costo) }),
@@ -71,6 +72,7 @@ function filaProducto(p) {
       Inventario.camino[p.id] ? el('div', { class: 'mini', style: 'color:var(--accent-2)', title: 'Pedido en órdenes de compra emitidas y todavía no recibido', text: '+' + cantidad(Inventario.camino[p.id]) + ' en camino' }) : null]),
     el('td', { class: 'der' }, vence),
     el('td', { class: 'der acciones' }, [
+      el('button', { class: 'icon-btn', title: 'Imprimir etiqueta', onclick: () => agregarEtiquetas([{ producto_id: p.id, copias: 1 }]) }, icon('tag', 18)),
       el('button', { class: 'icon-btn', title: 'Kárdex (entradas y salidas)', onclick: () => modalKardex(p) }, icon('list', 18)),
       el('button', { class: 'icon-btn', title: 'Ajustar existencia', onclick: () => modalAjuste(p) }, icon('boxplus', 18)),
       el('button', { class: 'icon-btn', title: 'Editar', onclick: () => modalProducto(p) }, icon('pencil', 18)),
@@ -83,7 +85,23 @@ function filaProducto(p) {
 
 function modalProducto(p) {
   const nuevo = !p;
-  p = p || { codigo: '', nombre: '', cabys: '', unidad: 'Unid', tarifa_iva: App.ajustes.tarifaDefecto || 13, precio: 0, costo: 0, stock_minimo: 0, vence: '' };
+  p = p || { codigo: '', nombre: '', cabys: '', unidad: 'Unid', tarifa_iva: App.ajustes.tarifaDefecto || 13, precio: 0, costo: 0, stock_minimo: 0, vence: '', sku: '', marca: '' };
+  const sku = el('input', { value: p.sku || '', placeholder: 'Código interno (opcional)' });
+  const marca = el('input', { value: p.marca || '', placeholder: 'Ej.: Dos Pinos', list: 'dl-marcas' });
+  const listaMarcas = el('datalist', { id: 'dl-marcas' });
+  const estadoLogo = el('span', { class: 'mini' });
+  let marcas = [];
+  const pintarLogo = () => {
+    const m = marcas.find((x) => x.nombre.toLowerCase() === marca.value.trim().toLowerCase());
+    estadoLogo.textContent = !marca.value.trim() ? 'Sin marca' : m && m.tiene_logo ? 'Con logo · sale en las etiquetas' : m ? 'Marca sin logo' : 'Marca nueva';
+  };
+  BESALU.marcas.listar().then((l) => { marcas = l || []; listaMarcas.innerHTML = ''; for (const m of marcas) listaMarcas.appendChild(el('option', { value: m.nombre })); pintarLogo(); }).catch(() => {});
+  marca.addEventListener('input', pintarLogo);
+  const botonLogo = el('button', { class: 'btn btn--ghost btn--sm', onclick: () => editorLogoMarca(marca.value, (r) => {
+    const i = marcas.findIndex((x) => x.id === r.id);
+    if (i >= 0) marcas[i] = Object.assign(marcas[i], r); else marcas.push(r);
+    marca.value = r.nombre; pintarLogo();
+  }) }, [icon('upload', 14), 'Logo de la marca…']);
   const codigo = el('input', { value: p.codigo, placeholder: 'Escaneá el código de barras' });
   const nombre = el('input', { value: p.nombre });
   const cabys = el('input', { value: p.cabys, placeholder: '13 dígitos', inputmode: 'numeric', maxlength: 13 });
@@ -112,7 +130,8 @@ function modalProducto(p) {
 
   const guardar = async () => {
     const datos = { codigo: codigo.value, nombre: nombre.value, cabys: cabys.value, unidad: unidad.value, tarifa_iva: Number(tarifa.value),
-      precio: aCentimos(precio.value), costo: aCentimos(costo.value), stock_minimo: leerNumero(minimo.value), vence: vence.value };
+      precio: aCentimos(precio.value), costo: aCentimos(costo.value), stock_minimo: leerNumero(minimo.value), vence: vence.value,
+      sku: sku.value, marca: marca.value };
     if (!datos.precio) { toast('Indique el precio de venta', 'err'); precio.focus(); return; }
     if (nuevo) datos.stock_inicial = leerNumero(stockIni.value);
     const r = await intentar(() => nuevo ? BESALU.productos.crear(datos) : BESALU.productos.actualizar(p.id, datos), 'No se pudo guardar el producto');
@@ -127,6 +146,9 @@ function modalProducto(p) {
     el('h2', { text: nuevo ? 'Agregar producto' : 'Editar producto' }),
     el('div', { class: 'g2' }, [campo('Código de barras', codigo), campo('CABYS (Hacienda)', cabys)]),
     campo('Nombre', nombre),
+    listaMarcas,
+    el('div', { class: 'g2' }, [campo('SKU', sku), campo('Marca', marca)]),
+    el('div', { style: 'display:flex;gap:10px;align-items:center;justify-content:flex-end;margin:-6px 0 12px' }, [estadoLogo, botonLogo]),
     el('div', { class: 'g2' }, [campo('Unidad', unidad), campo('Tarifa de IVA', tarifa)]),
     el('div', { class: 'g2' }, [campo('Costo sin IVA (₡)', costo, nuevo ? null : 'Se actualiza solo con cada compra (promedio)'), campo('Margen deseado %', margen)]),
     el('div', { class: 'calcbox' }, [el('div', { style: 'min-width:0' }, [el('div', { class: 'mini', text: 'Precio sugerido (con IVA)' }), sugerido, detalle]),

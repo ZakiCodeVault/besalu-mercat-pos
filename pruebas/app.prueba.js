@@ -16,6 +16,7 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const net = require('net');
 
 const { generarLlavePrueba } = require('./apoyo/llave-prueba');
 const { crearSimulador } = require('./apoyo/hacienda-simulada');
@@ -461,6 +462,84 @@ async function correr() {
   dialogo.showSaveDialog = dialogoGuardar; dialogo.showOpenDialog = dialogoAbrir;
   await js('while (hayModal()) cerrarModal(); true');
 
+  // ---- Proveedores con sus productos y compra rápida escaneando ----
+  await js(`go('compras'); true`); await esperar(300);
+  await js(`document.querySelector('#v-compras [data-vista="proveedores"]').click(); true`);
+  verificar('Compras tiene la pestaña "Proveedores" (los de las compras ya están)', await hasta(`document.querySelector('#v-compras tbody').textContent.includes('Distribuidora Central')`));
+  await js(`__boton('Nuevo proveedor').click(); true`); await tituloModal('Nuevo proveedor');
+  await js(`const m = __modal(); __escribir(__campo('Identificación', m), '3101444444'); __escribir(__campo('Nombre', m), 'Lácteos del Valle S.A.');
+    __escribir(__campo('Teléfono', m), '2222-3333'); __escribir(__campo('Días de crédito', m), '15');
+    const b = m.querySelector('input[list="dl-productos-prov"]'); b.value = '7441001100118'; __enter(b); true`); await esperar(150);
+  await js(`__escribir(__modal().querySelector('.lineas-compra tbody tr td:nth-child(3) input'), '990'); true`);
+  await captura('11-ficha-proveedor');
+  await js(`__boton('Guardar', __modal()).click(); true`); await hasta(`!document.querySelector('#modalRoot .modal')`);
+  const ficha = await js(`(async () => { const p = (await BESALU.proveedores.listar()).find(x => x.identificacion === '3101444444'); return p && await BESALU.proveedores.obtener(p.id); })()`);
+  verificar('Nuevo proveedor con su lista de productos y costo', ficha && ficha.dias_credito === 15 && ficha.telefono === '2222-3333' && ficha.productos.length === 1 && ficha.productos[0].costo === 99000,
+    ficha && ficha.nombre + ' · ' + ficha.productos.length + ' producto');
+
+  const antesCompra = await js(`(async () => (await BESALU.productos.listar()).find(x => x.codigo === '7441001100118'))()`);
+  await js(`formularioCompra(); true`); await tituloModal('Registrar factura de compra');
+  await js(`__escribir(__campo('Nombre del proveedor'), 'Lácteos del Valle S.A.'); true`);
+  await hasta(`__modal().textContent.includes('Proveedor guardado')`);
+  const identCompra = await js(`__campo('Identificación del proveedor').value`);
+  await js(`__escribir(__campo('Número de factura'), 'LV-1'); const e = __modal().querySelector('input[list="dl-productos"]');
+    for (let i = 0; i < 2; i++) { e.value = '7441001100118'; __enter(e); } true`); await esperar(200);
+  const filaCompra = await js(`[...__modal().querySelectorAll('.lineas-compra tbody tr')[0].querySelectorAll('input')].map(i => i.value)`);
+  await js(`__escribir(__modal().querySelectorAll('.lineas-compra tbody tr')[0].querySelectorAll('input')[3], '1295'); true`); await esperar(100);
+  await captura('12-compra-escaneando');
+  await js(`__boton('Registrar compra', __modal()).click(); true`); await hasta(`!document.querySelector('#modalRoot .modal')`);
+  const trasCompra = await js(`(async () => { const p = (await BESALU.productos.listar()).find(x => x.codigo === '7441001100118');
+    const c = (await BESALU.compras.listar({})).find(x => x.numero_documento === 'LV-1'); const d = c && await BESALU.compras.obtener(c.id);
+    return { precio: p.precio, stock: p.stock, cant: d && d.lineas[0].cantidad, costo: d && d.lineas[0].costo_unitario, lineas: d && d.lineas.length }; })()`);
+  verificar('Compra rápida: elegir el proveedor, escanear (dos veces = 2) con su costo y cambiar el precio de venta',
+    identCompra === '3101444444' && filaCompra[1] === '2' && trasCompra.lineas === 1 && trasCompra.cant === 2 && trasCompra.costo === 99000 &&
+    trasCompra.stock === antesCompra.stock + 2 && trasCompra.precio === 129500, JSON.stringify(trasCompra));
+
+  // ---- Marca con logo y SKU del producto ----
+  await js(`modalProducto(App.catalogo.find(x => x.codigo === '7441001100118')); true`); await tituloModal('Editar producto');
+  await js(`__escribir(__campo('SKU'), 'LCH-001'); __escribir(__campo('Marca'), 'Lechera del Valle'); __boton('Guardar', __modal()).click(); true`);
+  await hasta(`!document.querySelector('#modalRoot .modal')`);
+  const logoOk = await js(`(async () => {
+    const c = document.createElement('canvas'); c.width = 300; c.height = 120; const x = c.getContext('2d');
+    x.fillStyle = '#fff'; x.fillRect(0, 0, 300, 120); x.fillStyle = '#1a3d8f'; x.beginPath(); x.arc(60, 60, 50, 0, 7); x.fill(); x.font = '800 44px Inter'; x.fillText('Valle', 120, 76);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    const png = await prepararLogo(new File([blob], 'logo.png', { type: 'image/png' }));
+    const m = (await BESALU.marcas.listar()).find(z => z.nombre === 'Lechera del Valle');
+    await BESALU.marcas.guardar({ id: m.id, nombre: m.nombre, logo: png, umbral: 150 });
+    await App.recargarCatalogo();
+    const p = App.catalogo.find(z => z.codigo === '7441001100118');
+    return { sku: p.sku, marca: p.marca, logo: p.marca_logo, bytes: png.length };
+  })()`);
+  verificar('Producto con SKU y marca; el logo de la marca se guarda en escala de grises', logoOk.sku === 'LCH-001' && logoOk.marca === 'Lechera del Valle' && logoOk.logo === 1 && logoOk.bytes > 100,
+    logoOk.marca + ' · logo ' + logoOk.bytes + ' bytes');
+
+  // ---- Etiquetas: desde Inventario a una impresora de red simulada ----
+  const recibido = [];
+  const impresora = net.createServer((sk) => sk.on('data', (d) => recibido.push(d)));
+  await new Promise((r) => impresora.listen(0, '127.0.0.1', r));
+  await js(`(async () => { await BESALU.etiquetas.guardarConfig({ conexion: 'red', ip: '127.0.0.1', puerto: ${impresora.address().port}, ancho: 50, alto: 25, lenguaje: 'tspl' }); Etiquetas.config = null; Etiquetas.ancho = null; })(); true`);
+  await esperar(200);
+  await js(`go('inventario'); true`); await hasta(`[...document.querySelectorAll('#v-inventario tbody tr')].some(t => t.textContent.includes('7441001100118'))`);
+  await js(`[...document.querySelectorAll('#v-inventario tbody tr')].find(t => t.textContent.includes('7441001100118')).querySelector('button[title="Imprimir etiqueta"]').click(); true`);
+  await hasta(`App.vista === 'etiquetas' && !!document.querySelector('#v-etiquetas canvas.etiqueta') && document.querySelector('#v-etiquetas .grid-etq tbody').textContent.includes('7441001100118')`);
+  const vistaEtq = await js(`({ plantilla: document.querySelector('.plantilla-etq.sel').dataset.plantilla, pill: [...document.querySelectorAll('#v-etiquetas .pill')].map(p => p.textContent).join(' '),
+    filas: document.querySelectorAll('#v-etiquetas .grid-etq tbody tr').length })`);
+  await js(`__escribir(document.querySelector('#v-etiquetas .grid-etq tbody tr td:nth-child(3) input'), '3'); true`);
+  await captura('10-etiquetas');
+  await js(`__boton('Imprimir', document.querySelector('#v-etiquetas .grid-etq')).click(); true`);
+  for (let i = 0; i < 50 && !Buffer.concat(recibido).toString('latin1').includes('PRINT'); i++) await esperar(100);
+  await esperar(200);
+  impresora.close();
+  const enviado = Buffer.concat(recibido);
+  const txt = enviado.toString('latin1');
+  const marcaBmp = 'BITMAP 0,0,50,200,0,';
+  const iBmp = txt.indexOf(marcaBmp);
+  let negros = 0;
+  if (iBmp > 0) for (const b of enviado.subarray(iBmp + marcaBmp.length, iBmp + marcaBmp.length + 50 * 200)) for (let k = 0; k < 8; k++) if (!((b >> k) & 1)) negros++;
+  verificar('Etiqueta "Producto con marca" desde Inventario: llega a la impresora en TSPL (50 × 25 mm, 3 copias)', vistaEtq.plantilla === 'marca' && vistaEtq.filas === 1 &&
+    txt.startsWith('SIZE 50 mm,25 mm\r\n') && iBmp > 0 && txt.includes('PRINT 1,3') && negros > 3000 && negros < 50000, enviado.length + ' bytes · ' + negros + ' puntos negros');
+  await js('while (hayModal()) cerrarModal(); true');
+
   // ---- Seguridad de la pantalla ----
   const aislada = await js("({ process: typeof process, buffer: typeof Buffer, global: typeof global, abrir: window.open('https://example.com') === null })");
   verificar('Pantalla en sandbox: sin Node (process, Buffer) y sin ventanas nuevas', aislada.process === 'undefined' && aislada.buffer === 'undefined' && aislada.global === 'undefined' && aislada.abrir);
@@ -487,7 +566,7 @@ async function correr() {
   verificar('Emitir 1.000 ventas (desde la interfaz)', msVenta < 20, msVenta + ' ms por venta');
   const r2 = await recargar();
   verificar('Abrir la app con 1.000+ ventas', r2.ok && r2.ms < 3000, r2.ms + ' ms');
-  const tVistas = await js("(async () => { const t = performance.now(); for (const v of ['ventas','reportes','inventario','cierre','caja']) { go(v); await new Promise(r => setTimeout(r, 0)); } return Math.round(performance.now() - t); })()");
+  const tVistas = await js("(async () => { const t = performance.now(); for (const v of ['ventas','reportes','inventario','etiquetas','cierre','caja']) { go(v); await new Promise(r => setTimeout(r, 0)); } return Math.round(performance.now() - t); })()");
   verificar('Recorrer todas las pantallas', tVistas < 1500, tVistas + ' ms');
 
   // ---- Aviso de actualización ----

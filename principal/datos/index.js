@@ -3,8 +3,10 @@
  *
  *   conexion   abrir/cerrar, ajustes, bitácora, verificación de integridad
  *   productos  catálogo, ajustes de inventario, kárdex
+ *   marcas     marcas de los productos con su logo (para las etiquetas)
  *   ventas     tiquetes, facturas y notas de crédito
- *   compras    facturas de compra (entradas), recepciones y proveedores
+ *   compras    facturas de compra (entradas) y recepciones
+ *   proveedores ficha de cada proveedor y los productos que se le compran
  *   ordenes    órdenes de compra a proveedores
  *   caja       turnos: apertura, arqueo y cierre
  *   reportes   IVA a pagar, balance, ventas, alertas
@@ -15,8 +17,10 @@ module.exports = {
   conexion: require('./conexion'),
   montos: require('./montos'),
   productos: require('./productos'),
+  marcas: require('./marcas'),
   ventas: require('./ventas'),
   compras: require('./compras'),
+  proveedores: require('./proveedores'),
   ordenes: require('./ordenes'),
   caja: require('./caja'),
   reportes: require('./reportes'),

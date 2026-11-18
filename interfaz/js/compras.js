@@ -13,17 +13,18 @@ const Compras = { periodo: 'mes', texto: '', abierta: null, vista: 'facturas' };
 
 /** Pestañas de la pantalla: facturas de compra (lo que entró) y órdenes de compra (lo pedido). */
 function pestanasCompras() {
-  return el('div', { class: 'segmento', style: 'margin-bottom:14px' }, [['facturas', 'Facturas de compra'], ['ordenes', 'Órdenes de compra']].map(([k, t]) =>
+  return el('div', { class: 'segmento', style: 'margin-bottom:14px' }, [['facturas', 'Facturas de compra'], ['ordenes', 'Órdenes de compra'], ['proveedores', 'Proveedores']].map(([k, t]) =>
     el('button', { class: Compras.vista === k ? 'sel' : '', 'data-vista': k, onclick: () => { Compras.vista = k; renderCompras(); } }, t)));
 }
 
 async function renderCompras() {
   const root = $('#v-compras');
-  if (Compras.vista === 'ordenes') {
+  if (Compras.vista === 'ordenes' || Compras.vista === 'proveedores') {
     // Se arma aparte y se cambia de una vez: dos refrescos seguidos no duplican nada
+    const vista = Compras.vista;
     const cont = el('div');
-    await renderOrdenes(cont);
-    if (Compras.vista !== 'ordenes') return;
+    await (vista === 'ordenes' ? renderOrdenes(cont) : renderProveedores(cont));
+    if (Compras.vista !== vista) return;
     root.innerHTML = '';
     root.append(pestanasCompras(), ...cont.childNodes);
     return;
@@ -230,7 +231,13 @@ async function verCompra(id) {
     el('td', { class: 'der', text: cantidad(l.cantidad) }), el('td', { class: 'der', text: money(l.costo_unitario) }),
     el('td', { class: 'der', text: l.tarifa_iva + '%' }), el('td', { class: 'der', text: money(l.impuesto) }), el('td', { class: 'der', text: money(l.total_linea) })])));
   const acciones = [el('button', { class: 'btn btn--ghost', onclick: cerrarModal }, 'Cerrar')];
-  if (c.estado === 'vigente') acciones.unshift(el('button', { class: 'btn btn--danger-ghost', onclick: () => anularCompra(c) }, [icon('undo', 16), 'Anular compra']));
+  const conProducto = c.lineas.filter((l) => l.producto_id);
+  if (c.estado === 'vigente' && conProducto.length) {
+    // Una etiqueta por unidad recibida (los productos por peso, una por línea)
+    acciones.unshift(el('button', { class: 'btn btn--ghost', onclick: () => agregarEtiquetas(conProducto.map((l) => ({
+      producto_id: l.producto_id, copias: Math.min(500, Number.isInteger(l.cantidad) ? l.cantidad : 1) }))) }, [icon('tag', 16), 'Etiquetas']));
+  }
+  if (c.estado === 'vigente') acciones.unshift(el('button', { class: 'btn btn--danger-ghost', style: 'margin-right:auto', onclick: () => anularCompra(c) }, [icon('undo', 16), 'Anular compra']));
   abrirModal(el('div', { class: 'modal ancho', 'data-compra': String(c.id) }, [
     el('div', { class: 'card-t' }, [el('h2', { text: 'Factura ' + c.numero_documento }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
     el('div', { class: 'mini', style: 'margin-bottom:12px', text: c.proveedor_nombre + ' · ' + c.proveedor_identificacion + ' · ' + fechaCorta(c.fecha) + (c.clave ? ' · Clave ' + c.clave : '') }),
@@ -273,30 +280,91 @@ async function anularCompra(c) {
 
 /* ---------------- Formulario de compra ---------------- */
 /**
+ * Flujo rápido: se elige el proveedor (por nombre o cédula) y se completan sus
+ * datos; después se escanea cada producto que llegó: aparece con el costo de
+ * la lista del proveedor y solo se pone la cantidad. Escanear otra vez el
+ * mismo producto suma 1. Costo y precio de venta se pueden cambiar en la línea.
+ *
  * @param {object} borrador datos precargados (desde un XML o una orden) o null
  * @param {object} [orden] orden de compra que se está recibiendo: sus líneas
  *   pendientes vienen precargadas (modo 'orden') y el proveedor queda fijo.
  */
 async function formularioCompra(borrador, orden) {
-  const proveedores = (await intentar(() => BESALU.compras.proveedores())) || [];
+  const proveedores = (await intentar(() => BESALU.proveedores.listar())) || [];
   const b = borrador || { proveedor: { tipo_id: '02' }, fecha: isoDia(new Date()), lineas: [] };
-  const estado = { lineas: b.lineas.length ? b.lineas : [lineaVacia()] };
+  const estado = { lineas: b.lineas.slice(), enfocar: null };
   let ocupado = false;
+  let delProveedor = new Map();   // producto_id → { costo, codigo_proveedor } de la lista del proveedor elegido
 
   const provTipo = selector(TIPOS_ID, b.proveedor.tipo_id || '02');
-  const provId = el('input', { value: b.proveedor.identificacion || '', placeholder: 'Cédula del proveedor', list: 'dl-proveedores' });
-  const provNombre = el('input', { value: b.proveedor.nombre || '' });
+  const provId = el('input', { value: b.proveedor.identificacion || '', placeholder: 'Cédula del proveedor' });
+  const provNombre = el('input', { value: b.proveedor.nombre || '', placeholder: 'Escriba o elija el proveedor' });
   if (orden) for (const x of [provTipo, provId, provNombre]) x.disabled = true;   // el proveedor es el de la orden
-  const listaProv = el('datalist', { id: 'dl-proveedores' }, proveedores.map((p) => el('option', { value: p.identificacion, text: p.nombre })));
-  provId.addEventListener('change', () => { const p = proveedores.find((x) => x.identificacion === provId.value.replace(/\D/g, '')); if (p) { provNombre.value = p.nombre; provTipo.value = p.tipo_id; } });
+  const infoProv = el('div', { class: 'mini', style: 'margin:-4px 0 12px;min-height:16px' });
+  const enlace = enlazarProveedor({ tipo: provTipo, ident: provId, nombre: provNombre, proveedores, alCargar: (f) => {
+    delProveedor = new Map(f ? f.productos.map((x) => [x.producto_id, x]) : []);
+    infoProv.textContent = f ? 'Proveedor guardado · ' + plural(f.productos.length, 'producto en su lista', 'productos en su lista') +
+      (f.dias_credito ? ' · crédito ' + f.dias_credito + ' días' : '') + (f.telefono ? ' · tel. ' + f.telefono : '') : '';
+    for (const l of estado.lineas) {
+      // Líneas del XML con el código propio del proveedor: se reconocen como el producto de su lista
+      if (l.modo === 'nuevo' && l.nuevo && l.nuevo.codigo) {
+        for (const [pid, x] of delProveedor) {
+          const prod = x.codigo_proveedor === l.nuevo.codigo && App.catalogo.find((q) => q.id === pid);
+          if (prod) Object.assign(l, { modo: 'existente', producto_id: prod.id, texto: prod.codigo + ' — ' + prod.nombre, revisar: false });
+        }
+      }
+      if (l.producto_id && !l.costo && delProveedor.has(l.producto_id)) l.costo = delProveedor.get(l.producto_id).costo;
+    }
+    actualizarListaProductos();
+    pintarLineas();
+  } });
+  provId.addEventListener('input', () => { if (!enlace.actual()) infoProv.textContent = ''; });
   const numero = el('input', { value: b.numero_documento || '', placeholder: 'Consecutivo de la factura' });
   const fecha = el('input', { type: 'date', value: b.fecha || isoDia(new Date()) });
   const claveDoc = el('input', { value: b.clave || '', placeholder: '50 dígitos (opcional)' });
   const otros = el('input', { inputmode: 'decimal', value: b.otros_cargos ? aColonesTexto(b.otros_cargos) : '', placeholder: '0' });
   const notas = el('input', { value: b.notas || '', placeholder: 'Opcional' });
-  const listaProd = el('datalist', { id: 'dl-productos' }, App.catalogo.map((p) => el('option', { value: p.codigo + ' — ' + p.nombre })));
+  const listaProd = el('datalist', { id: 'dl-productos' });
   const cuerpo = el('tbody');
   const totales = el('div', { class: 'totales-compra' });
+  const escaner = el('input', { list: 'dl-productos', placeholder: 'Escanee el código de barras o escriba el producto…', style: 'padding-left:40px', autocomplete: 'off' });
+
+  /** Los productos del proveedor primero (con su costo), después el resto del catálogo. */
+  function actualizarListaProductos() {
+    listaProd.innerHTML = '';
+    const propios = App.catalogo.filter((p) => delProveedor.has(p.id));
+    for (const p of propios.concat(App.catalogo.filter((p) => !delProveedor.has(p.id)))) {
+      listaProd.appendChild(el('option', { value: p.codigo + ' — ' + p.nombre, text: delProveedor.has(p.id) ? 'De este proveedor · ' + money(delProveedor.get(p.id).costo) : '' }));
+    }
+  }
+  /** Por código de barras, por el código que usa el proveedor o por el nombre exacto. */
+  function buscarProducto(texto) {
+    const cod = texto.split(' — ')[0].trim();
+    let p = App.catalogo.find((x) => x.codigo === cod);
+    if (!p) for (const [pid, x] of delProveedor) if (x.codigo_proveedor && x.codigo_proveedor === cod) { p = App.catalogo.find((q) => q.id === pid); break; }
+    return p || App.catalogo.find((x) => x.nombre.toLowerCase() === texto.trim().toLowerCase());
+  }
+  function escanear() {
+    const t = escaner.value.trim();
+    if (!t) return;
+    escaner.value = '';
+    const p = buscarProducto(t);
+    if (!p) {
+      const codigo = t.split(' — ')[0].trim();
+      if (!/^(?=.*\d)[A-Za-z0-9-]{3,}$/.test(codigo)) { toast('Producto no encontrado', 'err', 'Escanee el código de barras o elíjalo de la lista'); return; }
+      const l = Object.assign(lineaVacia(), { modo: 'nuevo', nuevo: { codigo }, revisar: true });
+      estado.lineas.push(l); estado.enfocar = l; pintarLineas();
+      toast('Código nuevo: ' + codigo, 'ok', 'Complete el nombre y el precio de venta: se crea al registrar la compra');
+      return;
+    }
+    const ya = estado.lineas.find((l) => l.producto_id === p.id && (l.modo === 'existente' || l.modo === 'orden'));
+    if (ya) { ya.cantidad = Math.round(((Number(ya.cantidad) || 0) + 1) * 1000) / 1000; ya.exacto = false; estado.enfocar = ya; pintarLineas(); return; }
+    const deProv = delProveedor.get(p.id);
+    const l = Object.assign(lineaVacia(), { producto_id: p.id, texto: p.codigo + ' — ' + p.nombre, tarifa: p.tarifa_iva, costo: deProv ? deProv.costo : p.costo, cantidad: 1 });
+    estado.lineas.push(l); estado.enfocar = l; pintarLineas();
+  }
+  escaner.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); escanear(); } });
+  escaner.addEventListener('input', (e) => { if (e.inputType === 'insertReplacementText' || !e.inputType) escanear(); });   // elegido de la lista
 
   function recalcular() {
     let sub = 0, iva = 0;
@@ -314,8 +382,13 @@ async function formularioCompra(borrador, orden) {
 
   function pintarLineas() {
     cuerpo.innerHTML = '';
+    if (!estado.lineas.length) cuerpo.appendChild(el('tr', {}, el('td', { colspan: 8, class: 'mini', style: 'text-align:center;padding:22px', text: 'Escanee los productos que llegaron (o use "Agregar línea" para un gasto o un producto a mano).' })));
     estado.lineas.forEach((l, i) => cuerpo.appendChild(filaLinea(l, i)));
     recalcular();
+    // Después de escanear, el cursor queda en la cantidad de ese producto (Enter vuelve al escáner)
+    const foco = estado.enfocar && estado.enfocar._foco;
+    estado.enfocar = null;
+    if (foco) setTimeout(() => { foco.focus(); if (foco.select) foco.select(); }, 0);
   }
 
   function filaLinea(l, i) {
@@ -336,8 +409,12 @@ async function formularioCompra(borrador, orden) {
       inp.addEventListener('change', () => {
         const cod = inp.value.split(' — ')[0].trim();
         const p = App.catalogo.find((x) => x.codigo === cod) || App.catalogo.find((x) => x.nombre.toLowerCase() === inp.value.toLowerCase());
-        l.producto_id = p ? p.id : null; l.texto = inp.value;
-        if (p) { l.tarifa = p.tarifa_iva; inp.value = p.codigo + ' — ' + p.nombre; pintarLineas(); }
+        l.producto_id = p ? p.id : null; l.texto = inp.value; l.precio = null;
+        if (p) {
+          l.tarifa = p.tarifa_iva; inp.value = p.codigo + ' — ' + p.nombre;
+          if (!l.costo) l.costo = delProveedor.has(p.id) ? delProveedor.get(p.id).costo : p.costo;
+          pintarLineas();
+        }
         else toast('Producto no encontrado', 'err', 'Elija de la lista o cambie a "Producto nuevo"');
       });
       detalle = el('div', {}, [inp, l.producto_id ? null : el('div', { class: 'mini', style: 'color:var(--neg)', text: 'Elija un producto' })]);
@@ -348,6 +425,7 @@ async function formularioCompra(borrador, orden) {
       const pre = el('input', { inputmode: 'decimal', value: n.precio ? aColonesTexto(n.precio) : '', placeholder: 'Precio venta ₡ (con IVA)' });
       cod.oninput = () => (n.codigo = cod.value.trim()); nom.oninput = () => (n.nombre = nom.value.trim()); pre.oninput = () => (n.precio = aCentimos(pre.value));
       detalle = el('div', { class: 'nuevo-prod' }, [el('div', { class: 'g2' }, [cod, pre]), nom, n.cabys ? el('div', { class: 'mini', text: 'CABYS ' + n.cabys }) : null]);
+      l._foco = n.codigo ? nom : cod;
     } else if (l.modo === 'gasto') {
       const d = el('input', { value: l.descripcion || '', placeholder: 'Descripción del gasto' });
       d.oninput = () => (l.descripcion = d.value);
@@ -360,15 +438,36 @@ async function formularioCompra(borrador, orden) {
     const tarifa = selector(opcionesTarifa, l.tarifa);
     const montos = el('td', { class: 'der mini' });
     const pintarMontos = () => { const m = montosLinea(l); montos.innerHTML = ''; montos.append(el('div', { text: money(m.subtotal + m.impuesto) }), el('div', { text: 'IVA ' + money(m.impuesto) })); };
+    // Precio de venta (con IVA) de un producto que ya existe: se puede cambiar al recibir
+    const prod = l.producto_id && (l.modo === 'existente' || l.modo === 'orden') ? App.catalogo.find((x) => x.id === l.producto_id) : null;
+    let celdaPrecio = el('td', { class: 'mini', text: l.modo === 'gasto' ? '—' : '' });
+    let pintarMargen = () => {};
+    if (prod) {
+      if (l.precio == null) l.precio = prod.precio;
+      const pre = el('input', { inputmode: 'decimal', value: aColonesTexto(l.precio), title: 'Precio de venta con IVA', style: 'width:100px;text-align:right' });
+      const nota = el('div', { class: 'mini' });
+      pintarMargen = () => {
+        const m = margenDe(l.precio, prod.tarifa_iva, l.costo);
+        const cambio = l.precio !== prod.precio;
+        nota.textContent = (m == null ? '' : 'margen ' + (m > 0 ? '+' : '') + m + '%') + (cambio ? ' · antes ' + money(prod.precio) : '');
+        nota.style.color = cambio ? 'var(--accent-2)' : m != null && m <= 0 ? 'var(--neg)' : '';
+      };
+      pre.oninput = () => { l.precio = aCentimos(pre.value); pintarMargen(); };
+      pre.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); escaner.focus(); } });
+      celdaPrecio = el('td', {}, [pre, nota]);
+      pintarMargen();
+    }
     cant.oninput = () => { l.cantidad = leerNumero(cant.value); l.exacto = false; pintarMontos(); recalcular(); };
+    cant.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); escaner.focus(); } });
     if (l.modo === 'orden') cant.addEventListener('change', pintarLineas);   // repinta el aviso de "llegó de más"
-    costo.oninput = () => { l.costo = aCentimos(costo.value); l.exacto = false; pintarMontos(); recalcular(); };
+    if (!l._foco || l.modo !== 'nuevo') l._foco = cant;
+    costo.oninput = () => { l.costo = aCentimos(costo.value); l.exacto = false; pintarMontos(); pintarMargen(); recalcular(); };
     tarifa.onchange = () => { l.tarifa = Number(tarifa.value); l.exacto = false; pintarMontos(); recalcular(); };
     pintarMontos();
     return el('tr', { class: l.revisar ? 'fila-revisar' : '' }, [
-      el('td', {}, modo), el('td', { style: 'min-width:240px' }, detalle), el('td', {}, cant), el('td', {}, costo), el('td', {}, tarifa), montos,
+      el('td', {}, modo), el('td', { style: 'min-width:220px' }, detalle), el('td', {}, cant), el('td', {}, costo), el('td', {}, tarifa), celdaPrecio, montos,
       el('td', {}, el('button', { class: 'icon-btn icon-btn--danger', title: l.modo === 'orden' ? 'No llegó en esta entrega' : 'Quitar línea',
-        onclick: () => { estado.lineas.splice(i, 1); if (!estado.lineas.length) estado.lineas.push(lineaVacia()); pintarLineas(); } }, icon('trash', 16)))
+        onclick: () => { estado.lineas.splice(i, 1); pintarLineas(); } }, icon('trash', 16)))
     ]);
   }
 
@@ -400,18 +499,21 @@ async function formularioCompra(borrador, orden) {
         if (l.cantidad > l.pendiente + 0.0005) excesos.push(l.descripcion + ': llegaron ' + cantidad(l.cantidad) + ', faltaban ' + cantidad(l.pendiente));
         const base = { orden_linea_id: l.orden_linea_id, producto_id: l.producto_id, cantidad: l.cantidad, costo_unitario: l.costo, tarifa_iva: l.tarifa };
         if (l.exacto) Object.assign(base, { subtotal: l.subtotal, impuesto: l.impuesto });
+        if (!precioDe(l, base, i)) return;
         lineas.push(base);
         continue;
       }
+      if (l.modo === 'existente' && !l.producto_id && !String(l.texto || '').trim()) continue;   // línea que quedó en blanco
       if (!(l.cantidad > 0)) { toast('Línea ' + (i + 1) + ': cantidad inválida', 'err'); return; }
       const base = { cantidad: l.cantidad, costo_unitario: l.costo, tarifa_iva: l.tarifa };
       if (l.exacto) Object.assign(base, { subtotal: l.subtotal, impuesto: l.impuesto });
       if (l.modo === 'existente') {
-        if (!l.producto_id) {
-          if (orden && !l.texto && estado.lineas.length > 1) continue;   // línea extra que quedó en blanco
-          toast('Línea ' + (i + 1) + ': elija el producto', 'err'); return;
-        }
-        lineas.push(Object.assign(base, { producto_id: l.producto_id }));
+        if (!l.producto_id) { toast('Línea ' + (i + 1) + ': elija el producto', 'err'); return; }
+        Object.assign(base, { producto_id: l.producto_id });
+        const prod = App.catalogo.find((x) => x.id === l.producto_id);
+        if (l.codigo_xml && prod && l.codigo_xml !== prod.codigo) base.codigo_proveedor = l.codigo_xml;   // la próxima factura de este proveedor se reconoce sola
+        if (!precioDe(l, base, i)) return;
+        lineas.push(base);
       } else if (l.modo === 'nuevo') {
         const n = l.nuevo;
         if (!n.codigo || !n.nombre) { toast('Línea ' + (i + 1) + ': el producto nuevo necesita código y nombre', 'err'); return; }
@@ -421,6 +523,13 @@ async function formularioCompra(borrador, orden) {
         if (!String(l.descripcion || '').trim()) { toast('Línea ' + (i + 1) + ': escriba la descripción del gasto', 'err'); return; }
         lineas.push(Object.assign(base, { descripcion: l.descripcion }));
       }
+    }
+    function precioDe(l, base, i) {
+      const prod = App.catalogo.find((x) => x.id === l.producto_id);
+      if (!prod || l.precio == null || l.precio === prod.precio) return true;
+      if (!(l.precio > 0)) { toast('Línea ' + (i + 1) + ': el precio de venta no es válido', 'err'); return false; }
+      base.precio_venta = l.precio;
+      return true;
     }
     if (orden && !lineas.some((l) => l.orden_linea_id)) { toast('No hay nada recibido de la orden', 'err', 'Ponga la cantidad que llegó de cada producto'); return; }
     if (!lineas.length) { toast('Agregue al menos una línea', 'err'); return; }
@@ -438,7 +547,9 @@ async function formularioCompra(borrador, orden) {
     if (!r) return;
     cerrarModal();
     await App.recargarCatalogo();
-    toast(orden ? 'Mercadería recibida' : 'Compra registrada', 'ok', r.proveedor_nombre + ' · ' + money(r.total) + ' · IVA ' + money(r.impuesto));
+    const precios = lineas.filter((l) => l.precio_venta).length;
+    toast(orden ? 'Mercadería recibida' : 'Compra registrada', 'ok', r.proveedor_nombre + ' · ' + money(r.total) + ' · IVA ' + money(r.impuesto) +
+      (precios ? ' · ' + plural(precios, 'precio de venta actualizado', 'precios de venta actualizados') : ''));
     if (App.vista === 'compras') renderCompras();
     if (orden) verOrden(orden.id);
   }
@@ -447,11 +558,13 @@ async function formularioCompra(borrador, orden) {
   abrirModal(el('div', { class: 'modal ancho', 'data-recepcion': orden ? String(orden.id) : null }, [
     el('div', { class: 'card-t' }, [el('h2', { text: titulo }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
     orden ? el('div', { class: 'note', style: 'margin:0 0 12px', text: 'Ponga la cantidad que llegó de cada producto (0 si no vino en esta entrega). Lo que falte queda pendiente en la orden para la próxima entrega.' }) : null,
-    listaProv, listaProd,
-    el('div', { class: 'g3' }, [campo('Tipo', provTipo), campo('Identificación del proveedor', provId), campo('Nombre del proveedor', provNombre)]),
+    ...enlace.listas, listaProd,
+    el('div', { class: 'g3' }, [campo('Nombre del proveedor', provNombre), campo('Identificación del proveedor', provId), campo('Tipo', provTipo)]),
+    infoProv,
     el('div', { class: 'g3' }, [campo('Número de factura', numero), campo('Fecha de la factura', fecha), campo('Clave (si es electrónica)', claveDoc)]),
+    el('div', { class: 'search', style: 'margin:4px 0 10px' }, [icon('search', 18), escaner]),
     el('div', { class: 'tabla-wrap lineas-compra' }, el('table', {}, [
-      el('thead', {}, el('tr', {}, ['Tipo', 'Producto / descripción', orden ? 'Llegó' : 'Cantidad', 'Costo u. sin IVA', 'IVA', 'Total', ''].map((t) => el('th', { text: t })))), cuerpo])),
+      el('thead', {}, el('tr', {}, ['Tipo', 'Producto / descripción', orden ? 'Llegó' : 'Cantidad', 'Costo u. sin IVA', 'IVA', 'Precio venta', 'Total', ''].map((t) => el('th', { text: t })))), cuerpo])),
     el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px' }, [
       el('button', { class: 'btn btn--ghost btn--sm', onclick: () => { estado.lineas.push(lineaVacia()); pintarLineas(); } }, [icon('plus', 15), orden ? 'Agregar algo que no estaba en la orden' : 'Agregar línea']),
       orden && !b.xml_original ? el('button', { class: 'btn btn--ghost btn--sm', onclick: leerXmlRecepcion }, [icon('upload', 15), 'Leer XML de la factura']) : null]),
@@ -461,7 +574,10 @@ async function formularioCompra(borrador, orden) {
       el('button', { class: 'btn btn--pos', onclick: registrar }, [icon('check', 17), orden ? 'Registrar recepción' : 'Registrar compra'])])
   ]));
   otros.addEventListener('input', recalcular);
+  actualizarListaProductos();
   pintarLineas();
+  if (b.proveedor && b.proveedor.identificacion) enlace.cargar(b.proveedor.identificacion);
+  if (b.proveedor && b.proveedor.identificacion) escaner.focus(); else if (!orden) provNombre.focus();
 }
 
 /**
@@ -580,7 +696,7 @@ function leerXmlCompra(texto) {
       modo: existente ? 'existente' : 'nuevo', producto_id: existente ? existente.id : null,
       texto: existente ? existente.codigo + ' — ' + existente.nombre : '',
       nuevo: existente ? {} : { codigo: codCom || cabys, nombre: detalle, precio: precioSugerido, cabys, unidad: txt(ld, 'UnidadMedida') || 'Unid' },
-      revisar: !existente, descripcion: detalle, cantidad: cant, costo, tarifa, subtotal: sub, impuesto: iva, exacto: true
+      revisar: !existente, descripcion: detalle, cantidad: cant, costo, tarifa, subtotal: sub, impuesto: iva, exacto: true, codigo_xml: codCom
     };
   });
   if (!lineas.length) throw new Error('La factura no tiene líneas de detalle');

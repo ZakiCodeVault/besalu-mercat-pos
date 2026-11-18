@@ -7,7 +7,7 @@
  *   3. Abre la ventana del POS.
  *   4. Hace el respaldo diario y busca actualizaciones.
  */
-const { app, BrowserWindow, Menu, ipcMain, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, safeStorage, Notification } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const log = require('electron-log');
@@ -25,7 +25,8 @@ autoUpdater.autoInstallOnAppQuit = true;  // instala al cerrar si no reinician a
 
 let ventana = null;
 const estadoInicio = { integridad: null };
-const CUATRO_HORAS = 4 * 60 * 60 * 1000;
+const UNA_HORA = 60 * 60 * 1000;
+if (process.platform === 'win32') app.setAppUserModelId('com.besalu.mercatpos');   // las notificaciones de Windows salen con el nombre de la app
 
 function enviar(canal, info) {
   if (ventana && !ventana.isDestroyed()) ventana.webContents.send(canal, info);
@@ -135,11 +136,23 @@ function configurarSistema() {
   autoUpdater.on('update-available', (i) => enviar('actualizacion', { state: 'available', version: i && i.version }));
   autoUpdater.on('update-not-available', () => enviar('actualizacion', { state: 'none' }));
   autoUpdater.on('download-progress', (p) => enviar('actualizacion', { state: 'downloading', percent: Math.round((p && p.percent) || 0) }));
-  autoUpdater.on('update-downloaded', (i) => enviar('actualizacion', { state: 'downloaded', version: i && i.version }));
+  let avisada = null;
+  autoUpdater.on('update-downloaded', (i) => {
+    const version = i && i.version;
+    enviar('actualizacion', { state: 'downloaded', version });
+    // También una notificación de Windows: se ve aunque la app esté minimizada o detrás de otra ventana
+    if (version && avisada !== version && Notification.isSupported()) {
+      avisada = version;
+      const n = new Notification({ title: 'Besalú Mercat POS ' + version + ' está lista',
+        body: 'Toque "Reiniciar y actualizar" en la app cuando no esté cobrando. Si no, se instala sola al cerrarla.', silent: false });
+      n.on('click', () => { if (ventana) { if (ventana.isMinimized()) ventana.restore(); ventana.show(); ventana.focus(); } });
+      n.show();
+    }
+  });
   autoUpdater.on('error', (err) => { log.error('[updater]', err); enviar('actualizacion', { state: 'error', message: String((err && err.message) || err) }); });
   const buscar = () => autoUpdater.checkForUpdates().catch((e) => log.error('[updater] auto', e));
   setTimeout(buscar, 8000);
-  setInterval(buscar, CUATRO_HORAS);
+  setInterval(buscar, UNA_HORA);   // una versión publicada llega en menos de una hora
 }
 
 /* ---------------- Ciclo de vida ---------------- */

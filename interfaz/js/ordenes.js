@@ -80,12 +80,13 @@ async function renderOrdenes(root) {
 /* ---------------- Editor de borradores ---------------- */
 /**
  * @param {number|null} id borrador existente o null para uno nuevo
- * @param {object} [opciones] { sugerir: true } empieza con los productos bajo el mínimo
+ * @param {object} [opciones] { sugerir: true } empieza con los productos bajo el mínimo;
+ *   { proveedor: {tipo_id, identificacion, nombre} } empieza con ese proveedor elegido
  */
 async function editarOrden(id, opciones = {}) {
   const [orden, proveedores, camino] = await Promise.all([
     id ? intentar(() => BESALU.ordenes.obtener(id)) : null,
-    intentar(() => BESALU.compras.proveedores()), intentar(() => BESALU.ordenes.enCamino())]);
+    intentar(() => BESALU.proveedores.listar()), intentar(() => BESALU.ordenes.enCamino())]);
   if (id && !orden) return;
   if (orden && orden.estado !== 'borrador') { verOrden(id); return; }
   const enCamino = camino || {};
@@ -93,12 +94,15 @@ async function editarOrden(id, opciones = {}) {
   const estado = { lineas: orden ? orden.lineas.map((l) => ({ producto_id: l.producto_id, cantidad: l.cantidad, costo: l.costo_unitario })) : [] };
   let ocupado = false;
 
-  const provTipo = selector(TIPOS_ID, orden ? orden.proveedor_tipo_id : '02');
-  const provId = el('input', { value: orden ? orden.proveedor_identificacion : '', placeholder: 'Cédula del proveedor', list: 'dl-proveedores-oc' });
-  const provNombre = el('input', { value: orden ? orden.proveedor_nombre : '' });
-  const listaProv = el('datalist', { id: 'dl-proveedores-oc' }, (proveedores || []).map((p) => el('option', { value: p.identificacion, text: p.nombre })));
-  const proveedorElegido = () => (proveedores || []).find((x) => x.identificacion === provId.value.replace(/[^\dA-Za-z]/g, ''));
-  provId.addEventListener('change', () => { const p = proveedorElegido(); if (p) { provNombre.value = p.nombre; provTipo.value = p.tipo_id; } });
+  const inicial = orden ? { tipo_id: orden.proveedor_tipo_id, identificacion: orden.proveedor_identificacion, nombre: orden.proveedor_nombre } : (opciones.proveedor || {});
+  const provTipo = selector(TIPOS_ID, inicial.tipo_id || '02');
+  const provId = el('input', { value: inicial.identificacion || '', placeholder: 'Cédula del proveedor' });
+  const provNombre = el('input', { value: inicial.nombre || '', placeholder: 'Escriba o elija el proveedor' });
+  let delProveedor = new Map();   // producto_id → costo de la lista del proveedor elegido
+  const enlace = enlazarProveedor({ tipo: provTipo, ident: provId, nombre: provNombre, proveedores: proveedores || [], alCargar: (f) => {
+    delProveedor = new Map(f ? f.productos.map((x) => [x.producto_id, x]) : []);
+  } });
+  const proveedorElegido = () => enlace.actual();
   const esperada = el('input', { type: 'date', value: orden ? orden.fecha_esperada : '' });
   const notas = el('input', { value: orden ? orden.notas : '', placeholder: 'Opcional: condiciones, horario de entrega…' });
 
@@ -110,7 +114,8 @@ async function editarOrden(id, opciones = {}) {
   function agregarProducto(p, cantidadSugerida, costo) {
     const ya = estado.lineas.find((l) => l.producto_id === p.id);
     if (ya) { toast('"' + p.nombre + '" ya está en la orden', 'ok', 'Cambie su cantidad en la tabla'); return false; }
-    estado.lineas.push({ producto_id: p.id, cantidad: cantidadSugerida || 1, costo: costo != null ? costo : p.costo });
+    const deProv = delProveedor.get(p.id);
+    estado.lineas.push({ producto_id: p.id, cantidad: cantidadSugerida || 1, costo: costo != null ? costo : deProv ? deProv.costo : p.costo });
     return true;
   }
   function agregarDesdeBuscador() {
@@ -127,13 +132,13 @@ async function editarOrden(id, opciones = {}) {
   buscar.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); agregarDesdeBuscador(); } });
 
   async function sugerir() {
-    const prov = proveedorElegido();
+    const prov = proveedorElegido() || await enlace.cargar(provId.value);
     const s = await intentar(() => BESALU.ordenes.sugerencias(prov ? { proveedor_id: prov.id } : {}));
     if (!s) return;
     let n = 0;
     for (const x of s) { const p = productoDe(x.producto_id); if (p && !estado.lineas.some((l) => l.producto_id === p.id)) { agregarProducto(p, x.sugerido, x.costo); n++; } }
     toast(n ? plural(n, 'producto agregado', 'productos agregados') : 'No hay productos por pedir', 'ok',
-      n ? 'Los que están bajo su mínimo, contando lo que ya viene en camino' + (prov ? ' (de este proveedor o nunca comprados)' : '') : '');
+      n ? 'Los que están bajo su mínimo, contando lo que ya viene en camino' + (prov ? ' (de la lista de este proveedor)' : '') : '');
     pintar();
   }
 
@@ -204,8 +209,8 @@ async function editarOrden(id, opciones = {}) {
   const botonEmitir = el('button', { class: 'btn btn--pos', onclick: (e) => guardar(true, e.currentTarget) }, [icon('check', 17), 'Emitir orden']);
   abrirModal(el('div', { class: 'modal ancho' }, [
     el('div', { class: 'card-t' }, [el('h2', { text: orden ? 'Borrador de orden de compra' : 'Nueva orden de compra' }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
-    listaProv, listaProd,
-    el('div', { class: 'g3' }, [campo('Tipo', provTipo), campo('Identificación del proveedor', provId), campo('Nombre del proveedor', provNombre)]),
+    ...enlace.listas, listaProd,
+    el('div', { class: 'g3' }, [campo('Nombre del proveedor', provNombre), campo('Identificación del proveedor', provId), campo('Tipo', provTipo)]),
     el('div', { class: 'g2' }, [campo('Entrega esperada', esperada), campo('Notas para el proveedor', notas)]),
     el('div', { style: 'display:flex;gap:8px;margin:6px 0 10px' }, [
       el('div', { class: 'search', style: 'flex:1' }, [icon('search', 18), buscar]),
@@ -219,6 +224,7 @@ async function editarOrden(id, opciones = {}) {
       orden ? el('button', { class: 'btn btn--danger-ghost', style: 'margin-right:auto', onclick: eliminar }, [icon('trash', 16), 'Borrar borrador']) : null,
       el('button', { class: 'btn btn--ghost', onclick: (e) => guardar(false, e.currentTarget) }, 'Guardar borrador'), botonEmitir])
   ]));
+  if (inicial.identificacion) await enlace.cargar(inicial.identificacion);
   if (opciones.sugerir) await sugerir(); else pintar();
 }
 

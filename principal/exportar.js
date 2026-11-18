@@ -128,10 +128,10 @@ function todoExcel() {
     ['Órdenes de compra emitidas', String(d.prepare('SELECT count(*) AS n FROM ordenes_compra WHERE numero IS NOT NULL').get().n)],
     ['Movimientos de inventario', String(d.prepare('SELECT count(*) AS n FROM movimientos').get().n)]] });
 
-  hojas.push({ nombre: 'Productos', columnas: [col('Código'), col('Producto', 'texto', 34), col('CABYS', 'texto', 15), col('Unidad', 'texto', 8),
+  hojas.push({ nombre: 'Productos', columnas: [col('Código'), col('SKU', 'texto', 12), col('Producto', 'texto', 34), col('Marca', 'texto', 16), col('CABYS', 'texto', 15), col('Unidad', 'texto', 8),
     col('IVA %', 'cantidad', 7), col('Precio (con IVA)', 'dinero'), col('Costo (sin IVA)', 'dinero'), col('Existencia', 'cantidad', 11),
     col('Mínimo', 'cantidad', 9), col('En camino', 'cantidad', 10), col('Valor al costo', 'dinero'), col('Vence', 'fecha', 11), col('Activo', 'texto', 8)],
-  filas: prods.map((p) => [p.codigo, p.nombre, p.cabys, p.unidad, p.tarifa_iva, p.precio, p.costo, p.stock, p.stock_minimo, camino[p.id] || 0,
+  filas: prods.map((p) => [p.codigo, p.sku, p.nombre, p.marca, p.cabys, p.unidad, p.tarifa_iva, p.precio, p.costo, p.stock, p.stock_minimo, camino[p.id] || 0,
     Math.round(Math.max(0, p.stock) * p.costo), p.vence, p.activo ? 'Sí' : 'No']) });
 
   hojas.push({ nombre: 'Movimientos', columnas: [col('Fecha', 'fechaHora', 17), col('Código'), col('Producto', 'texto', 30), col('Movimiento', 'texto', 22),
@@ -184,8 +184,15 @@ function todoExcel() {
     col('Emitida', 'fechaHora', 17), col('Fecha esperada', 'fecha', 12), col('Código'), col('Producto', 'texto', 30), col('Pedido', 'cantidad', 9),
     col('Recibido', 'cantidad', 9), col('Pendiente', 'cantidad', 10), col('Costo u. (sin IVA)', 'dinero'), col('Total línea', 'dinero')], filas: filasOc });
 
-  hojas.push({ nombre: 'Proveedores', columnas: [col('Identificación'), col('Nombre', 'texto', 30), col('Correo', 'texto', 26), col('Teléfono')],
-    filas: todos('SELECT * FROM proveedores ORDER BY nombre COLLATE NOCASE').map((p) => [p.identificacion, p.nombre, p.correo, p.telefono]) });
+  hojas.push({ nombre: 'Proveedores', columnas: [col('Identificación'), col('Nombre', 'texto', 30), col('Nombre comercial', 'texto', 24), col('Correo', 'texto', 26),
+    col('Teléfono'), col('Contacto', 'texto', 20), col('Días de crédito', 'entero', 10), col('Dirección', 'texto', 30), col('Notas', 'texto', 30), col('Activo', 'texto', 8)],
+    filas: todos('SELECT * FROM proveedores ORDER BY nombre COLLATE NOCASE').map((p) => [p.identificacion, p.nombre, p.nombre_comercial, p.correo, p.telefono,
+      p.contacto, p.dias_credito, p.direccion, p.notas, p.activo ? 'Sí' : 'No']) });
+  hojas.push({ nombre: 'Productos por proveedor', columnas: [col('Proveedor', 'texto', 30), col('Código'), col('Producto', 'texto', 34),
+    col('Código del proveedor', 'texto', 16), col('Costo (sin IVA)', 'dinero'), col('Última compra', 'fecha', 12)],
+    filas: todos(`SELECT pr.nombre AS proveedor, p.codigo, p.nombre, pp.codigo_proveedor, pp.costo, pp.ultima_compra
+                  FROM proveedor_productos pp JOIN proveedores pr ON pr.id = pp.proveedor_id JOIN productos p ON p.id = pp.producto_id
+                  ORDER BY pr.nombre COLLATE NOCASE, p.nombre COLLATE NOCASE`).map((r) => [r.proveedor, r.codigo, r.nombre, r.codigo_proveedor, r.costo, r.ultima_compra]) });
   hojas.push({ nombre: 'Clientes', columnas: [col('Identificación'), col('Nombre', 'texto', 30), col('Correo', 'texto', 26), col('Teléfono')],
     filas: todos('SELECT * FROM clientes ORDER BY nombre COLLATE NOCASE').map((c) => [c.identificacion, c.nombre, c.correo, c.telefono]) });
   return crearLibro(hojas);

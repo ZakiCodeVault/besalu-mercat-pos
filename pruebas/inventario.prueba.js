@@ -409,9 +409,10 @@ print(json.dumps({ws.title: ws.max_row - 1 for ws in wb.worksheets}))`, archivo]
     const hojas = JSON.parse(salida);
     const esperado = { 'Productos': fila('SELECT count(*) AS n FROM productos').n, 'Movimientos': fila('SELECT count(*) AS n FROM movimientos').n,
       'Ventas': fila('SELECT count(*) AS n FROM comprobantes').n, 'Compras': fila('SELECT count(*) AS n FROM compras').n,
-      'Órdenes de compra': fila('SELECT count(*) AS n FROM orden_compra_lineas').n };
+      'Órdenes de compra': fila('SELECT count(*) AS n FROM orden_compra_lineas').n,
+      'Productos por proveedor': fila('SELECT count(*) AS n FROM proveedor_productos').n };
     for (const [h, n] of Object.entries(esperado)) ok(hojas[h] === n, h + ': ' + hojas[h] + ' filas, se esperaban ' + n);
-    ok(Object.keys(hojas).length === 10, Object.keys(hojas).join(', '));
+    ok(Object.keys(hojas).length === 11, Object.keys(hojas).join(', '));
     return Object.keys(hojas).length + ' hojas · ' + esperado.Movimientos + ' movimientos';
   });
 

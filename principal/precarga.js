@@ -41,6 +41,14 @@ contextBridge.exposeInMainWorld('BESALU', {
     datosMensaje: c('compras:datosMensaje'), responder: c('compras:responder'),
     reintentarMensaje: c('compras:reintentarMensaje'), guardarXmlMensaje: c('compras:guardarXmlMensaje')
   },
+  marcas: { listar: c('marcas:listar'), guardar: c('marcas:guardar'), logo: c('marcas:logo'), eliminar: c('marcas:eliminar') },
+  etiquetas: {
+    config: c('etiquetas:config'), guardarConfig: c('etiquetas:guardarConfig'),
+    impresoras: c('etiquetas:impresoras'), imprimir: c('etiquetas:imprimir')
+  },
+  proveedores: {
+    listar: c('proveedores:listar'), obtener: c('proveedores:obtener'), guardar: c('proveedores:guardar'), eliminar: c('proveedores:eliminar')
+  },
   ordenes: {
     listar: c('ordenes:listar'), obtener: c('ordenes:obtener'), guardar: c('ordenes:guardar'), eliminar: c('ordenes:eliminar'),
     emitir: c('ordenes:emitir'), cerrar: c('ordenes:cerrar'), cancelar: c('ordenes:cancelar'),

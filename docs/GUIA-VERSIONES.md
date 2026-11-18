@@ -39,10 +39,12 @@ hay que entrar a **Releases**, abrir el borrador `vX.Y.Z`, revisar y tocar
 
 ## Como se ve la actualizacion en la caja
 
-- La app revisa al abrir y cada 4 horas.
+- La app revisa al abrir y cada hora.
 - Si hay una version nueva, la **descarga en segundo plano** y muestra un aviso
   discreto: "Descargando actualizacion... %".
 - Al terminar: "Version X.Y.Z lista" con **Reiniciar y actualizar** / **Mas tarde**.
+- Tambien sale una **notificacion de Windows** ("Besalu Mercat POS X.Y.Z esta lista"),
+  que se ve aunque la app este minimizada; al tocarla se abre la app.
 - Si eligen "Mas tarde", se instala sola al cerrar la app.
 - En **Ajustes > Acerca de** esta la version instalada y un boton
   **Buscar actualizaciones** (incluye "Ya tenes la ultima version").

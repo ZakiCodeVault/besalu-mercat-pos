@@ -497,6 +497,60 @@ const MIGRACIONES = [
   WHEN round(NEW.stock, 3) <> round(OLD.stock + coalesce((SELECT cantidad FROM movimientos WHERE producto_id = NEW.id ORDER BY id DESC LIMIT 1), 0), 3)
    AND round(NEW.stock, 3) <> round((SELECT coalesce(sum(cantidad), 0) FROM movimientos WHERE producto_id = NEW.id), 3)
   BEGIN SELECT RAISE(ABORT, 'La existencia solo cambia con movimientos de inventario (kárdex)'); END;
+  `,
+
+  /* ===== Versión 6: ficha de proveedores con sus productos, marcas con logo y SKU ===== */
+  `
+  ALTER TABLE proveedores ADD COLUMN nombre_comercial TEXT NOT NULL DEFAULT '';
+  ALTER TABLE proveedores ADD COLUMN contacto TEXT NOT NULL DEFAULT '';
+  ALTER TABLE proveedores ADD COLUMN direccion TEXT NOT NULL DEFAULT '';
+  ALTER TABLE proveedores ADD COLUMN notas TEXT NOT NULL DEFAULT '';
+  ALTER TABLE proveedores ADD COLUMN dias_credito INTEGER NOT NULL DEFAULT 0 CHECK(dias_credito BETWEEN 0 AND 365);
+  ALTER TABLE proveedores ADD COLUMN activo INTEGER NOT NULL DEFAULT 1 CHECK(activo IN (0, 1));
+  ALTER TABLE proveedores ADD COLUMN actualizado_en TEXT NOT NULL DEFAULT '';
+
+  -- Lo que se le compra a cada proveedor, con el último costo (céntimos, sin IVA).
+  -- Se llena solo con cada compra y también se arma a mano en la ficha del proveedor.
+  CREATE TABLE proveedor_productos(
+    proveedor_id     INTEGER NOT NULL REFERENCES proveedores(id),
+    producto_id      INTEGER NOT NULL REFERENCES productos(id),
+    codigo_proveedor TEXT NOT NULL DEFAULT '',
+    costo            INTEGER NOT NULL DEFAULT 0 CHECK(costo >= 0),
+    ultima_compra    TEXT NOT NULL DEFAULT '' CHECK(ultima_compra = '' OR ultima_compra GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    creado_en        TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    actualizado_en   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY(proveedor_id, producto_id)
+  );
+  CREATE INDEX proveedor_productos_producto ON proveedor_productos(producto_id);
+  -- El código que usa el proveedor para un producto no se repite dentro de su lista
+  CREATE UNIQUE INDEX proveedor_productos_codigo ON proveedor_productos(proveedor_id, codigo_proveedor) WHERE codigo_proveedor <> '';
+
+  -- Marcas: el logo se carga una vez y lo usan todas las etiquetas de sus productos.
+  -- Se guarda en la base (viaja en la copia completa) en escala de grises, ya reducido.
+  CREATE TABLE marcas(
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre         TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK(length(trim(nombre)) > 0),
+    logo           BLOB CHECK(logo IS NULL OR length(logo) <= 400000),
+    umbral         INTEGER NOT NULL DEFAULT 128 CHECK(umbral BETWEEN 20 AND 235),
+    creado_en      TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    actualizado_en TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+  ALTER TABLE productos ADD COLUMN sku TEXT NOT NULL DEFAULT '';
+  ALTER TABLE productos ADD COLUMN marca_id INTEGER REFERENCES marcas(id);
+  CREATE INDEX productos_marca ON productos(marca_id);
+  -- El SKU (código interno) es opcional, pero no se repite
+  CREATE UNIQUE INDEX productos_sku ON productos(sku) WHERE sku <> '';
+
+  -- Lo ya comprado: cada producto con el costo de su última factura vigente de ese proveedor
+  INSERT INTO proveedor_productos(proveedor_id, producto_id, costo, ultima_compra)
+    SELECT c.proveedor_id, cl.producto_id,
+           (SELECT cl2.costo_unitario FROM compra_lineas cl2 JOIN compras c2 ON c2.id = cl2.compra_id
+            WHERE c2.proveedor_id = c.proveedor_id AND cl2.producto_id = cl.producto_id AND c2.estado = 'vigente'
+            ORDER BY c2.fecha DESC, c2.id DESC, cl2.linea DESC LIMIT 1),
+           max(c.fecha)
+    FROM compra_lineas cl JOIN compras c ON c.id = cl.compra_id
+    WHERE cl.producto_id IS NOT NULL AND c.estado = 'vigente'
+    GROUP BY c.proveedor_id, cl.producto_id;
   `
 ];
 

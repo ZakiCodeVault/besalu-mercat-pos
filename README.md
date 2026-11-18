@@ -13,6 +13,11 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
   recepción suma al inventario y cada venta lo descuenta.
 - **Copia completa** de todo en un solo archivo, que se puede **cargar** en
   esta u otra computadora, y **exportación de todo a Excel**.
+- **Proveedores con sus productos**: al registrar una compra se elige el
+  proveedor, se **escanea** cada producto y ya trae su costo; solo se pone la
+  cantidad (y se puede cambiar el costo o el precio de venta ahí mismo).
+- **Etiquetas** para la impresora **SAT TT448-2 USE** (USB o red): plantillas
+  listas con **logo de la marca**, nombre, **SKU**, **código de barras** y precio.
 - Firma cada comprobante (XML 4.4 + firma XAdES-EPES con la llave
   criptográfica) y lo envía a la API de Hacienda en segundo plano. Si no hay
   internet la caja sigue vendiendo y los envía solos al volver la conexión.
@@ -39,15 +44,17 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 7. [Instalar en una caja (Windows)](#instalar-en-una-caja-windows)
 8. [Primer uso](#primer-uso)
 9. [Órdenes de compra y entrada de mercadería](#órdenes-de-compra-y-entrada-de-mercadería)
-10. [Hacienda: conexión propia](#hacienda-conexión-propia)
-11. [Factura al correo del cliente](#factura-al-correo-del-cliente)
-12. [Trabajar en el código](#trabajar-en-el-código)
-13. [Pruebas](#pruebas)
-14. [Publicar una versión nueva](#publicar-una-versión-nueva)
-15. [Rendimiento](#rendimiento)
-16. [Atajos de teclado](#atajos-de-teclado)
-17. [Seguridad](#seguridad)
-18. [Pendientes](#pendientes)
+10. [Proveedores y compra rápida](#proveedores-y-compra-rápida)
+11. [Etiquetas (SAT TT448-2)](#etiquetas-sat-tt448-2)
+12. [Hacienda: conexión propia](#hacienda-conexión-propia)
+13. [Factura al correo del cliente](#factura-al-correo-del-cliente)
+14. [Trabajar en el código](#trabajar-en-el-código)
+15. [Pruebas](#pruebas)
+16. [Publicar una versión nueva](#publicar-una-versión-nueva)
+17. [Rendimiento](#rendimiento)
+18. [Atajos de teclado](#atajos-de-teclado)
+19. [Seguridad](#seguridad)
+20. [Pendientes](#pendientes)
 
 ---
 
@@ -57,8 +64,9 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 |---|---|
 | **Caja** (F1) | Escanear o buscar productos y cobrar en efectivo (con cambio), tarjeta o SINPE. Sin cliente emite un **tiquete**; con cliente (identificación + nombre) emite una **factura**. Cada comprobante sale con su **consecutivo** y **clave** de 50 dígitos. |
 | **Ventas** (F2) | Todos los comprobantes emitidos, con su **estado en Hacienda** (pendiente, en validación, aceptado, rechazado). Ver, reimprimir, descargar el **XML firmado** y la **respuesta de Hacienda**, ver si la factura se **envió al correo del cliente** y **reenviarla**, emitir **nota de crédito** (anula la venta y devuelve el inventario) y **reemitir** un comprobante rechazado. Exportar a Excel. |
-| **Compras** (F3) | Registrar las **facturas de proveedores**: a mano o **importando el XML** de la factura electrónica. Suma el inventario, actualiza el costo promedio y guarda el IVA pagado. **Aceptar** (total o parcial) o **rechazar** la factura ante Hacienda con el Mensaje Receptor, y ver su estado (columna *Hacienda*). Anular una compra mal registrada (si parte ya se vendió, avisa antes). **Órdenes de compra** (pestaña aparte): borrador → emitida con número `OC-00001` → recibida en una o varias entregas → cerrada; PDF para el proveedor y *Pedir lo que falta*. Ver [Órdenes de compra](#órdenes-de-compra-y-entrada-de-mercadería). |
-| **Inventario** (F4) | Productos con CABYS, tarifa de IVA, costo, precio y existencia. **Kárdex** por producto (cada entrada y salida con su documento). Ajustes de inventario con motivo (conteo físico, merma, vencido…). Alertas de stock bajo y vencimientos. Lo que viene **en camino** en órdenes de compra y **Pedir lo que falta** (arma la orden con lo que está bajo el mínimo). |
+| **Compras** (F3) | Registrar las **facturas de proveedores**: a mano o **importando el XML** de la factura electrónica. Suma el inventario, actualiza el costo promedio y guarda el IVA pagado. **Aceptar** (total o parcial) o **rechazar** la factura ante Hacienda con el Mensaje Receptor, y ver su estado (columna *Hacienda*). Anular una compra mal registrada (si parte ya se vendió, avisa antes). **Órdenes de compra** (pestaña aparte): borrador → emitida con número `OC-00001` → recibida en una o varias entregas → cerrada; PDF para el proveedor y *Pedir lo que falta*. Ver [Órdenes de compra](#órdenes-de-compra-y-entrada-de-mercadería). **Proveedores** (pestaña aparte): ficha de cada uno con los productos que se le compran y su costo. |
+| **Inventario** (F4) | Productos con CABYS, tarifa de IVA, costo, precio y existencia. **Kárdex** por producto (cada entrada y salida con su documento). Ajustes de inventario con motivo (conteo físico, merma, vencido…). Alertas de stock bajo y vencimientos. Lo que viene **en camino** en órdenes de compra y **Pedir lo que falta** (arma la orden con lo que está bajo el mínimo). **SKU** y **marca** de cada producto, con el **logo de la marca** para las etiquetas. |
+| **Etiquetas** (F8) | Plantillas listas (producto con marca, precio de góndola, código de barras, oferta, vencimiento/lote) en 50 × 25, 40 × 30, 60 × 40, 100 × 50 mm u otro tamaño. Se escanean los productos, se ponen las copias y se imprime en la SAT TT448-2. Vista previa exacta de lo que sale. Ver [Etiquetas](#etiquetas-sat-tt448-2). |
 | **Reportes** (F5) | **IVA a pagar** del período (débito − crédito) y desglose por tarifa. Ventas netas, costo de lo vendido, utilidad, compras. **Entradas y salidas** de inventario. Ventas por día, medios de pago, más vendidos. Exportar ventas, compras e IVA a Excel. |
 | **Cierre** (F6) | Turno de caja: fondo inicial, ventas por medio de pago, arqueo de efectivo (esperado vs. contado) y cierre con **reporte Z**. Al cerrar se hace un respaldo automático. |
 | **Ajustes** (F7) | **Conexión con Hacienda** (ambiente, usuario y contraseña de la API, llave .p12 y PIN), **correo SMTP** para enviar las facturas, datos del negocio emisor (cédula, actividad económica, ubicación, sucursal, terminal), impresión, respaldos y restauración, **copia completa** (exportar y cargar), **exportar todo a Excel**, verificación de integridad, bitácora y actualizaciones. |
@@ -110,6 +118,8 @@ alguien abra el archivo con otro programa, SQLite rechaza:
   no se reabre) o cancelarla con mercadería recibida.
 - Registrar una recepción contra una orden que no está abierta, de otro
   proveedor, o con una línea que no es de esa orden.
+- Repetir un SKU entre productos, o un código del proveedor dentro de su lista.
+- Logos que no sean imagen PNG o que pasen de 400 KB.
 
 Además:
 
@@ -139,11 +149,15 @@ besalu-mercat-pos/
 │   ├── exportar.js             ← Archivos CSV y el Excel con todo.
 │   ├── xlsx.js                 ← Arma archivos .xlsx (sin dependencias).
 │   ├── orden-pdf.js            ← Orden de compra en PDF para el proveedor.
+│   ├── etiquetas.js            ← Impresora de etiquetas: configuración, comandos TSPL/ZPL
+│   │                             y envío por USB (cola RAW de Windows) o por la red.
 │   ├── datos/                  ← Toda la lógica de datos y reglas fiscales
 │   │   ├── esquema.js          ← Tablas, restricciones y triggers de protección.
 │   │   ├── conexion.js         ← Abrir/cerrar SQLite, ajustes, bitácora, integridad.
 │   │   ├── montos.js           ← IVA por línea, consecutivo, clave, fechas.
-│   │   ├── productos.js        ← Catálogo, ajustes de inventario y kárdex.
+│   │   ├── productos.js        ← Catálogo (con SKU y marca), ajustes de inventario y kárdex.
+│   │   ├── marcas.js           ← Marcas y su logo para las etiquetas.
+│   │   ├── proveedores.js      ← Ficha de proveedores y los productos que se le compran.
 │   │   ├── ventas.js           ← Tiquetes, facturas y notas de crédito.
 │   │   ├── compras.js          ← Facturas de proveedores, recepciones y anulaciones.
 │   │   ├── ordenes.js          ← Órdenes de compra: borrador, emitir, avance, cerrar,
@@ -173,6 +187,9 @@ besalu-mercat-pos/
 │       ├── app.js              ← Arranque, navegación y atajos.
 │       ├── caja.js · ventas.js · compras.js · inventario.js
 │       ├── ordenes.js          ← Órdenes de compra: lista, borrador, detalle y recepción.
+│       ├── proveedores.js      ← Ficha de proveedores y la elección del proveedor en compras.
+│       ├── etiquetas.js        ← Plantillas, vista previa a 203 dpi, logos e impresión.
+│       ├── codigo-barras.js    ← EAN-13, EAN-8, UPC-A y Code 128 (sin librerías).
 │       ├── reportes.js · cierre.js · ajustes.js
 │       ├── hacienda.js         ← Configuración (Hacienda y correo), indicador y estado
 │       │                         por comprobante (incluido el correo al cliente).
@@ -184,6 +201,7 @@ besalu-mercat-pos/
 ├── pruebas/
 │   ├── datos.prueba.js         ← Reglas fiscales, protecciones, respaldos, velocidad.
 │   ├── inventario.prueba.js    ← Órdenes de compra, recepciones, existencias, copias y Excel.
+│   ├── etiquetas.prueba.js     ← Proveedores, marcas y SKU, códigos de barras, TSPL/ZPL y envío.
 │   ├── hacienda.prueba.js      ← XML, firma, envío, rechazos, Mensaje Receptor, sin internet,
 │   │                             producción.
 │   ├── correo.prueba.js        ← Factura al correo: adjuntos, PDF, reintentos, TLS.
@@ -226,11 +244,13 @@ IVA, el consecutivo y la clave los calcula el sistema con los datos de la base.
 
 | Tabla | Contenido |
 |---|---|
-| `productos` | Código, nombre, CABYS, unidad, tarifa IVA, precio (con IVA), costo promedio (sin IVA), existencia, mínimo, vencimiento. |
+| `productos` | Código, SKU, nombre, marca, CABYS, unidad, tarifa IVA, precio (con IVA), costo promedio (sin IVA), existencia, mínimo, vencimiento. |
 | `comprobantes` / `comprobante_lineas` | Tiquetes, facturas y notas de crédito con consecutivo, clave, receptor, totales e IVA por línea. Estado en Hacienda, XML firmado y respuesta de Hacienda, el reemplazo de un rechazado y el estado del correo al cliente (columnas `correo_*`, aparte de las fiscales). |
 | `compras` / `compra_lineas` | Facturas de proveedores con número, clave, fecha, subtotal, IVA, total y el XML original. |
 | `mensajes_receptor` | Aceptación o rechazo de cada factura de compra ante Hacienda: consecutivo, condición del IVA, montos tal como en la factura, estado en Hacienda, XML firmado y respuesta. |
 | `ordenes_compra` / `orden_compra_lineas` | Órdenes a proveedores: número `OC-…`, estado (borrador, emitida, cerrada, cancelada), entrega esperada, productos, cantidades y costos. Lo recibido no se guarda aparte: sale de las compras vigentes ligadas a cada línea (vista `orden_compra_avance`), así que anular una recepción lo devuelve a pendiente solo. |
+| `proveedor_productos` | Lo que se le compra a cada proveedor: último costo, fecha de la última compra y el código que usa el proveedor. Se llena solo con cada compra. |
+| `marcas` | Marcas con su logo (PNG en grises, dentro de la base) y la intensidad con que se imprime. |
 | `movimientos` | Kárdex: cada entrada y salida de inventario con su documento. La existencia de cada producto es la suma de sus movimientos. |
 | `secuencias` · `secuencias_receptor` | Último número usado por tipo de comprobante (01, 03, 04) y de mensaje (05, 06, 07). |
 | `turnos` | Turnos de caja con fondo, esperado, contado y diferencia. |
@@ -334,6 +354,77 @@ ajuste con motivo.
 Si una recepción se registró mal, se **anula la compra**: sale del inventario y
 lo recibido vuelve a quedar pendiente en la orden. Si parte de esa mercadería ya
 se vendió, avisa qué productos quedarían en negativo y pide confirmar.
+
+---
+
+## Proveedores y compra rápida
+
+*Compras → Proveedores* tiene la ficha de cada proveedor: identificación,
+nombre, teléfono, correo, contacto, días de crédito, dirección, notas y la
+**lista de productos que se le compran** con su costo sin IVA (y, si lo usa, su
+propio código para el producto). La lista se llena sola con cada compra y se
+puede armar o corregir a mano.
+
+Al registrar una compra (o una orden):
+
+1. Escribir o elegir el **nombre o la cédula** del proveedor: se completan sus
+   datos y se cargan sus productos.
+2. **Escanear** cada producto que llegó: aparece con el costo de su lista y el
+   cursor queda en la cantidad (Enter vuelve al escáner). Escanear otra vez el
+   mismo producto suma 1. Un código que no existe abre la línea de producto
+   nuevo con ese código.
+3. Si cambió el costo, se corrige en la línea. El **precio de venta** también
+   se puede cambiar ahí: muestra el margen y el precio anterior, y al registrar
+   la compra queda guardado (y en la bitácora).
+
+Al importar el XML de un proveedor, los productos que él factura con su propio
+código se reconocen solos desde la segunda vez.
+
+---
+
+## Etiquetas (SAT TT448-2)
+
+La sección **Etiquetas** (F8) imprime en la **SAT TT448-2 USE** (transferencia
+térmica, 203 dpi, hasta 104 mm de ancho) en su propio lenguaje (**TSPL**; también
+**ZPL**), sin pasar por el diálogo de impresión: cada punto sale exactamente
+como en la vista previa.
+
+**Primera vez:**
+
+1. Instalar el driver de SAT que viene con la impresora (USB) o conectarla a la
+   red y anotar su IP (sale en su hoja de configuración).
+2. Calibrarla con el rollo puesto: mantener presionado **FEED** hasta que avance
+   unas etiquetas.
+3. *Etiquetas → Configurar impresora*: elegir **USB** (y la impresora de
+   Windows) o **Cable de red** (IP y puerto 9100), el tamaño del rollo, la
+   separación entre etiquetas (normalmente 2 mm) y la oscuridad.
+4. **Etiqueta de prueba**: debe salir un marco completo, el texto y un código de
+   barras que el lector de la caja lea como `123456789012`. Si sale corrida, se
+   ajusta el corrimiento en mm.
+
+**Imprimir:** elegir la plantilla y el tamaño, escanear los productos, poner las
+copias e **Imprimir**. También se mandan desde **Inventario** (botón de
+etiqueta en cada producto) o desde el detalle de una **compra** (una etiqueta
+por unidad recibida).
+
+| Plantilla | Lleva |
+|---|---|
+| Producto con marca | Logo de la marca, nombre, SKU, código de barras y precio con IVA en bloque negro |
+| Precio de góndola | Nombre, precio muy grande, logo y banda "IVA incluido" con el SKU |
+| Código de barras | Código de barras grande, nombre, precio y SKU |
+| Oferta | Banda "OFERTA" con fecha límite, precio anterior tachado y precio de oferta |
+| Vencimiento / lote | Fecha de vencimiento destacada, lote y SKU |
+
+**Logo de la marca:** en la ficha del producto, *Marca* → **Logo de la marca…**.
+Se carga una vez por marca (PNG, JPG, WEBP o SVG; mejor sobre fondo blanco): se
+recorta, se pasa a grises y se ve cómo queda impreso en negro, con una barra de
+**intensidad** para que no se pierda ni salga muy grueso.
+
+**Códigos de barras:** se codifica exactamente el código del producto, para que
+el lector de la caja lo lea igual: EAN-13, UPC-A o EAN-8 si el código es válido,
+y Code 128 para códigos internos. Las barras nunca son más delgadas de 0,25 mm
+(2 puntos); si en un tamaño chico no caben, la etiqueta se reacomoda o imprime
+el número (y la vista previa lo avisa).
 
 ---
 
@@ -564,12 +655,13 @@ donde se esté trabajando, y no se buscan actualizaciones.
 ## Pruebas
 
 ```bash
-npm run prueba            # las cinco juntas (198 pruebas)
+npm run prueba            # las seis juntas (222 pruebas)
 npm run prueba:datos      # 40 pruebas de reglas fiscales y protecciones
 npm run prueba:inventario # 24 pruebas de órdenes de compra, existencias y copias
+npm run prueba:etiquetas  # 19 pruebas de proveedores, marcas, códigos de barras e impresión
 npm run prueba:hacienda   # 50 pruebas de la conexión con Hacienda
 npm run prueba:correo     # 25 pruebas del envío de facturas por correo
-npm run prueba:app        # 59 pruebas con la app real, de punta a punta
+npm run prueba:app        # 64 pruebas con la app real, de punta a punta
 ```
 
 Todas usan una carpeta temporal y **no tocan** los datos del negocio. Las de
@@ -598,6 +690,21 @@ modelo, con la existencia de cada producto igual a la suma de su kárdex; copia
 completa, cargarla, archivo inválido, copia de una versión más nueva o anterior
 y que si falla al abrirse todo queda como estaba; y el Excel con todas sus
 hojas (leído con otro programa).
+
+**`prueba:etiquetas`** comprueba: las validaciones de la ficha del proveedor
+(largo de la cédula según su tipo, correo, días de crédito, repetidos); su lista
+de productos (sin repetidos, códigos del proveedor únicos e intercambiables); que
+cada compra deja el último costo en la lista sin que una factura vieja lo pise y
+aprende el código del proveedor de su XML; el precio de venta cambiado al
+recibir (y que una compra fallida no mueve nada); desactivar y reactivar;
+*Pedir lo que falta* por proveedor; la migración que arma las listas con lo ya
+comprado; marca por nombre, SKU sin repetir y el logo (solo PNG, tamaño máximo);
+que la copia completa lleva todo eso; la tabla completa de Code 128 y la
+estructura de EAN-13, EAN-8 y UPC-A; los comandos TSPL (imagen invertida, copias)
+y ZPL exactos; las validaciones antes de imprimir; el envío por la red a una
+impresora simulada (byte por byte) y el aviso si está apagada; y, en Windows, la
+cola RAW por USB. Los códigos de barras generados también se leyeron con el
+lector de códigos de macOS (EAN-13, EAN-8, UPC-A y Code 128 de varios largos).
 
 **`prueba:hacienda`** comprueba: que IVA = base × tarifa en 20 000 montos al
 azar y que el total del XML es lo cobrado; la lectura de la llave y el PIN; que
@@ -641,6 +748,10 @@ y que el sistema solo atiende pedidos de la pantalla del POS. Además recorre la
 "en camino" en Inventario, recibir en dos entregas (una de más), anular una
 recepción, cerrar con faltante, anular lo ya vendido (aviso de negativo),
 *Pedir lo que falta*, exportar la copia completa y el Excel, y cargar la copia.
+También crea un **proveedor** con su lista, registra una **compra escaneando**
+(con su costo y cambiando el precio de venta), pone **SKU, marca y logo** a un
+producto e imprime sus **etiquetas** desde Inventario a una impresora de red
+simulada, revisando lo que le llega.
 Con `BESALU_CAPTURAS=<carpeta>` guarda capturas de esas pantallas para
 revisarlas.
 
@@ -659,8 +770,9 @@ git push --follow-tags     # GitHub prueba, compila el .exe y crea el Release (b
 ```
 
 Luego en GitHub → **Releases** → abrir el borrador → **Publish release**.
-Las cajas instaladas detectan la versión nueva (al abrir y cada 4 horas), la
-descargan solas y muestran **"Reiniciar y actualizar"**.
+Las cajas instaladas detectan la versión nueva (al abrir y **cada hora**), la
+descargan solas y muestran **"Reiniciar y actualizar"**, además de una
+**notificación de Windows** (se ve aunque la app esté minimizada).
 
 ---
 
@@ -682,6 +794,7 @@ Medido con las pruebas:
 | Tecla | Acción |
 |---|---|
 | F1 – F7 | Caja, Ventas, Compras, Inventario, Reportes, Cierre, Ajustes |
+| F8 | Etiquetas |
 | Enter (en el buscador) | Agregar el producto escaneado |
 | Enter (buscador vacío) | Ir a cobrar |
 | F12 | Cobrar |
@@ -736,6 +849,9 @@ Medido con las pruebas:
 - **Firma de código** (quita el aviso "Editor desconocido" y permite que Windows
   verifique cada actualización): ver [docs/GUIA-VERSIONES.md](docs/GUIA-VERSIONES.md).
 - **Logo real** del negocio para el ícono y el instalador (`recursos/`).
+- **Primera etiqueta en la SAT TT448-2 real**: configurarla, calibrar el rollo e
+  imprimir la etiqueta de prueba (los comandos y los códigos de barras ya están
+  verificados, falta confirmar en la impresora física la oscuridad y el corrimiento).
 - **Avisos de SINPE Móvil (BAC)** en la caja para que la cajera confirme el
   pago: falta un correo de notificación real del banco (`.eml`) y el buzón donde
   llegan.
