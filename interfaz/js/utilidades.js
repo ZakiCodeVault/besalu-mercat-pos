@@ -132,12 +132,34 @@ function toast(m, k, sub) {
 }
 
 /** Ejecuta una llamada al sistema y muestra el error de forma clara si falla. */
+/**
+ * Corre una operación y muestra el error si falla. Si el rol no alcanza, pide
+ * la autorización de un encargado (PIN) y la reintenta una vez; si la sesión
+ * se cerró, vuelve a la pantalla de ingreso.
+ */
 async function intentar(fn, titulo) {
   try { return await fn(); }
-  catch (e) { toast(titulo || 'No se pudo completar', 'err', String((e && e.message) || e).replace(/^Error invoking remote method '[^']*': (Error: )?/, '')); return undefined; }
+  catch (e) {
+    const texto = String((e && e.message) || e).replace(/^Error invoking remote method '[^']*': (Error: )?/, '');
+    const permiso = /^§permiso:(\w+)§/.exec(texto);
+    if (permiso && typeof pedirAutorizacion === 'function') {
+      if (!(await pedirAutorizacion(permiso[1], texto.replace(/^§[^§]*§/, '')))) return undefined;
+      try { return await fn(); }
+      catch (e2) { toast(titulo || 'No se pudo completar', 'err', limpiarMensaje(e2)); return undefined; }
+    }
+    if (/^§sesion§/.test(texto) && typeof mostrarIngreso === 'function') { mostrarIngreso(); return undefined; }
+    toast(titulo || 'No se pudo completar', 'err', texto.replace(/^§[^§]*§/, ''));
+    return undefined;
+  }
 }
 
 /* ---------------- Ventanas (modales) ---------------- */
+// Al pasar a un campo dentro de una ventana, la ventana baja (o sube) sola hasta él
+document.addEventListener('focusin', (e) => {
+  const t = e.target;
+  if (!t || !t.closest || !t.closest('.modal') || t.classList.contains('pin-input')) return;
+  requestAnimationFrame(() => { try { t.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (x) {} });
+});
 function abrirModal(nodo) {
   const fondo = el('div', { class: 'modal-bg', onclick: (e) => { if (e.target === fondo) cerrarModal(); } }, [nodo]);
   $('#modalRoot').appendChild(fondo);

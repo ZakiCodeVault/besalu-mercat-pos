@@ -115,7 +115,7 @@ async function editarOrden(id, opciones = {}) {
     const ya = estado.lineas.find((l) => l.producto_id === p.id);
     if (ya) { toast('"' + p.nombre + '" ya está en la orden', 'ok', 'Cambie su cantidad en la tabla'); return false; }
     const deProv = delProveedor.get(p.id);
-    estado.lineas.push({ producto_id: p.id, cantidad: cantidadSugerida || 1, costo: costo != null ? costo : deProv ? deProv.costo : p.costo });
+    estado.lineas.push({ producto_id: p.id, cantidad: cantidadSugerida || (deProv && deProv.ultima_cantidad > 0 ? deProv.ultima_cantidad : 1), costo: costo != null ? costo : deProv ? deProv.costo : p.costo });
     return true;
   }
   function agregarDesdeBuscador() {
@@ -124,8 +124,12 @@ async function editarOrden(id, opciones = {}) {
     const cod = texto.split(' — ')[0].trim();
     const p = App.catalogo.find((x) => x.codigo === cod) || App.catalogo.find((x) => x.nombre.toLowerCase() === texto.toLowerCase());
     if (!p) { toast('Producto no encontrado', 'err', 'Elíjalo de la lista; si es nuevo, créelo primero en Inventario'); return; }
-    if (agregarProducto(p)) pintar();
     buscar.value = '';
+    if (agregarProducto(p)) {
+      pintar();
+      const c = estado.lineas[estado.lineas.length - 1]._cant;   // a la cantidad del recién agregado (Enter vuelve al buscador)
+      if (c) { c.focus(); c.select(); return; }
+    }
     buscar.focus();
   }
   buscar.addEventListener('change', agregarDesdeBuscador);
@@ -152,6 +156,8 @@ async function editarOrden(id, opciones = {}) {
       const imp = Math.round(s * (p.tarifa_iva || 0) / 100);
       sub += s; iva += imp;
       const cant = el('input', { inputmode: 'decimal', value: String(l.cantidad).replace('.', ','), style: 'width:90px;text-align:right' });
+      l._cant = cant;
+      cant.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); cant.dispatchEvent(new Event('change')); buscar.focus(); } });
       const costo = el('input', { inputmode: 'decimal', value: aColonesTexto(l.costo || 0), style: 'width:120px;text-align:right' });
       const total = el('td', { class: 'der', text: money(s + imp) });
       cant.addEventListener('change', () => { l.cantidad = leerNumero(cant.value); pintar(); });

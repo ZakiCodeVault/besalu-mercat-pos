@@ -224,6 +224,8 @@ async function cobrar() {
 
 function modalAbrirCaja() {
   const fondo = el('input', { inputmode: 'decimal', value: '50000', style: 'text-align:right;font-size:18px;font-weight:700' });
+  // Patrón: el mismo fondo del turno anterior
+  BESALU.caja.historial().then((h) => { if (h && h[0] && fondo.value === '50000') { fondo.value = aColonesTexto(h[0].fondo); if (document.activeElement === fondo) fondo.select(); } }).catch(() => {});
   const abrir = async () => {
     const t = await intentar(() => BESALU.caja.abrir(aCentimos(fondo.value)), 'No se pudo abrir la caja');
     if (!t) return;

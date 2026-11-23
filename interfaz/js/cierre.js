@@ -31,16 +31,34 @@ async function renderCierre() {
           money(resumen.medios[k] - resumen.devoluciones_por_medio[k]))),
         el('div', { class: 'note', text: 'Tarjeta: compará con el cierre del datáfono. SINPE: con los depósitos del banco.' })])
     ]));
+    // Quién tiene la caja ahora y los relevos del turno
+    const abierto = (resumen.tramos || []).find((x) => !x.tramo.fin);
+    root.appendChild(el('div', { class: 'card glass', style: 'margin-top:16px' }, [
+      el('div', { class: 'card-t' }, [el('h2', { text: 'Cajeros del turno' }),
+        puedo('relevo') ? el('button', { class: 'btn btn--accent btn--sm', onclick: relevoDeCaja }, [icon('user', 15), 'Relevo de caja']) : null]),
+      abierto ? el('div', { class: 'note', style: 'margin:0 0 12px' }, [el('b', { text: abierto.tramo.usuario_nombre }),
+        ' tiene la caja desde las ' + horaDe(abierto.tramo.inicio) + ' · recibió ' + money(abierto.tramo.recibido)]) : null,
+      (resumen.tramos || []).length ? el('div', { class: 'tabla-wrap', style: 'border:1px solid var(--line)' }, el('table', {}, [
+        el('thead', {}, el('tr', {}, ['Cajero', 'Horario', 'Recibió', 'Ventas', 'Esperado', 'Contado', 'Diferencia'].map((t, i) => el('th', { text: t, class: i > 1 ? 'der' : '' })))),
+        el('tbody', {}, resumen.tramos.map((x) => el('tr', {}, [
+          el('td', { style: 'font-weight:600', text: x.tramo.usuario_nombre }),
+          el('td', { class: 'mini', text: horaDe(x.tramo.inicio) + ' – ' + (x.tramo.fin ? horaDe(x.tramo.fin) : 'ahora') + (x.tramo.entrega_a_nombre ? ' → ' + x.tramo.entrega_a_nombre : '') }),
+          el('td', { class: 'der', text: money(x.tramo.recibido) }), el('td', { class: 'der', text: money(x.ventas_netas) }),
+          el('td', { class: 'der', text: x.tramo.fin ? money(x.tramo.esperado) : '—' }), el('td', { class: 'der', text: x.tramo.fin ? money(x.tramo.contado) : '—' }),
+          el('td', { class: 'der', style: 'font-weight:700;color:' + (!x.tramo.fin ? 'var(--ink-3)' : x.tramo.diferencia === 0 ? 'var(--pos)' : 'var(--neg)'),
+            text: x.tramo.fin ? (x.tramo.diferencia > 0 ? '+' : '') + money(x.tramo.diferencia) : 'en curso' })])))])) : el('div', { class: 'mini', text: 'Esta caja se abrió antes de los usuarios.' })]));
+
     root.appendChild(el('div', { class: 'card glass', style: 'margin-top:16px' }, [el('h2', { text: 'Arqueo de efectivo' }),
       fila('Efectivo esperado (fondo + ventas en efectivo − devoluciones en efectivo)', money(resumen.efectivo_esperado)),
       el('div', { class: 'campo', style: 'margin:12px 0 4px' }, [el('label', { text: 'Efectivo contado en caja (₡)' }), contado]),
       el('div', { class: 'arqueo' }, [el('span', { class: 'mini', text: 'Diferencia' }), dif]),
-      el('button', { class: 'btn btn--accent btn--lg btn--block', style: 'margin-top:14px', onclick: () => cerrarCaja(resumen, contado.value) }, [icon('lock', 18), 'Cerrar caja y generar Z'])]));
+      el('button', { class: 'btn btn--accent btn--lg btn--block', style: 'margin-top:14px', onclick: () => cerrarCaja(resumen, contado.value) }, [icon('lock', 18), 'Cerrar caja y generar Z']),
+      puedo('cerrar_caja') ? null : el('div', { class: 'mini', style: 'text-align:center;margin-top:8px', text: 'Para cerrar la caja se pide el PIN de un encargado.' })]));
   }
 
   if (historial && historial.length) {
     const tb = el('tbody', {}, historial.map((h) => el('tr', {}, [
-      el('td', { text: '#' + h.id }), el('td', { class: 'mini', text: fechaHora(h.abierto_en) + ' → ' + fechaHora(h.cerrado_en) }),
+      el('td', { text: '#' + h.id }), el('td', { class: 'mini', text: fechaHora(h.abierto_en) + ' → ' + fechaHora(h.cerrado_en) + (h.cerrado_por_nombre ? ' · cerró ' + h.cerrado_por_nombre : '') }),
       el('td', { class: 'der', text: money(h.esperado) }), el('td', { class: 'der', text: money(h.contado) }),
       el('td', { class: 'der', style: 'font-weight:700;color:' + (h.diferencia === 0 ? 'var(--pos)' : 'var(--neg)'), text: (h.diferencia > 0 ? '+' : '') + money(h.diferencia) }),
       el('td', { class: 'der' }, el('button', { class: 'icon-btn', title: 'Reimprimir Z', onclick: async () => { const r = await intentar(() => BESALU.caja.resumen(h.id)); if (r) imprimir(armarCierre(r)); } }, icon('printer', 17)))])));

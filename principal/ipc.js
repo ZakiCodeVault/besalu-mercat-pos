@@ -30,11 +30,48 @@ function amigable(e) {
   return m;
 }
 
+/* ---------------- Usuarios: quién puede pedir cada operación ---------------- */
+// Sin sesión solo se puede ingresar (o crear el primer administrador)
+const LIBRES = new Set(['sesion:estado', 'sesion:ingresar', 'sesion:crearPrimerAdmin', 'sesion:crearMiPin', 'sesion:recuperar']);
+// Permiso que pide cada operación (las demás solo piden haber ingresado)
+const PERMISO_CANAL = {
+  vender: ['ventas:emitir', 'caja:abrir', 'correo:reenviar', 'clientes:buscar'],
+  devolver: ['ventas:notaCredito', 'ventas:reemitir'],
+  cerrar_caja: ['caja:cerrar'],
+  relevo: ['caja:relevo'],
+  compras: ['compras:registrar', 'compras:anular', 'compras:revisarAnulacion', 'compras:responder', 'compras:reintentarMensaje', 'compras:guardarXmlMensaje',
+    'compras:listar', 'compras:obtener', 'compras:datosMensaje', 'ordenes:listar', 'ordenes:obtener', 'ordenes:guardar', 'ordenes:eliminar', 'ordenes:emitir',
+    'ordenes:cerrar', 'ordenes:cancelar', 'ordenes:sugerencias', 'ordenes:pdf', 'proveedores:listar', 'proveedores:obtener', 'proveedores:guardar', 'proveedores:eliminar',
+    'sugerencias:compra'],
+  inventario: ['productos:crear', 'productos:actualizar', 'productos:ajustar', 'productos:eliminar', 'productos:reactivar', 'marcas:guardar', 'marcas:eliminar'],
+  etiquetas: ['etiquetas:imprimir', 'etiquetas:guardarConfig'],
+  reportes: ['reportes:iva', 'reportes:balance', 'reportes:cajeros', 'exportar:csv', 'exportar:todoExcel', 'bitacora:leer'],
+  ajustes: ['ajustes:guardar', 'hacienda:guardar', 'hacienda:elegirLlave', 'hacienda:empezarProduccion', 'hacienda:probar', 'correo:guardar', 'correo:probar',
+    'respaldos:restaurar', 'respaldos:restaurarArchivo', 'respaldos:elegirCarpeta', 'respaldos:exportarCopia', 'integridad:repararStock', 'migracion:importarV1'],
+  usuarios: ['usuarios:listar', 'usuarios:crear', 'usuarios:actualizar', 'usuarios:reiniciarPin']
+};
+const permisoDe = new Map();
+for (const [p, canales] of Object.entries(PERMISO_CANAL)) for (const c of canales) permisoDe.set(c, p);
+
 function manejar(canal, fn) {
   ipcMain.handle(canal, async (e, ...args) => {
     if (!seguridad.remitenteValido(e)) { log.warn('[ipc] pedido rechazado de ' + ((e.senderFrame && e.senderFrame.url) || 'origen desconocido')); return { ok: false, error: 'Origen no autorizado' }; }
-    try { return { ok: true, valor: await fn(...args) }; }
-    catch (e) { log.error('[' + canal + ']', e); return { ok: false, error: amigable(e) }; }
+    const { sesion, usuarios } = datos;
+    let autorizo = null;
+    if (!LIBRES.has(canal)) {
+      const u = sesion.usuario();
+      if (!u) return { ok: false, sesion: true, error: 'Ingrese con su usuario' };
+      const permiso = permisoDe.get(canal);
+      if (permiso && !usuarios.puede(u.rol, permiso)) {
+        // Un encargado o administrador puede autorizar UNA vez esta acción con su PIN
+        autorizo = sesion.tomarAutorizacion(permiso);
+        if (!autorizo) return { ok: false, permiso, error: 'Para ' + usuarios.NOMBRE_PERMISO[permiso] + ' se necesita la autorización de un encargado' };
+      }
+    }
+    try {
+      const valor = autorizo ? await sesion.conAutorizado(autorizo, () => fn(...args)) : await fn(...args);
+      return { ok: true, valor };
+    } catch (err) { log.error('[' + canal + ']', err); return { ok: false, error: amigable(err) }; }
   });
 }
 
@@ -42,7 +79,7 @@ function manejar(canal, fn) {
  * @param {object} ctx { ventana(), estadoInicio, carpetaDatos }
  */
 function registrar(ctx) {
-  const { conexion, productos, marcas, ventas, compras, proveedores, ordenes, caja, reportes, respaldos, migracionV1 } = datos;
+  const { conexion, productos, marcas, ventas, compras, proveedores, ordenes, caja, reportes, respaldos, migracionV1, usuarios, sesion } = datos;
   const hoy = () => fechaLocal().slice(0, 10);
 
   /* ---- sistema ---- */
@@ -148,6 +185,56 @@ function registrar(ctx) {
     return z;
   });
   manejar('caja:historial', () => caja.historial());
+  manejar('caja:tramo', () => { const t = caja.actual(); return t ? caja.tramoAbierto(t.id) : null; });
+  manejar('caja:resumenTramo', (id) => caja.resumenTramo(id));
+  // Relevo: el que entra confirma con su PIN
+  manejar('caja:relevo', (contado, entranteId, pin) => {
+    const entrante = usuarios.verificar(entranteId, pin);
+    const r = caja.relevo(contado, entrante.id);
+    sesion.iniciar(entrante);   // desde ya trabaja el que recibió
+    return Object.assign(r, { usuario: Object.assign({}, entrante, { permisos: usuarios.PERMISOS[entrante.rol] }) });
+  });
+
+  /* ---- sesión y usuarios ---- */
+  const conPermisos = (u) => Object.assign({}, u, { permisos: usuarios.PERMISOS[u.rol] });
+  const alIngresar = (u) => {
+    sesion.iniciar(u);
+    caja.asegurarTramo(u.id);   // caja abierta antes de existir usuarios: queda a cargo de quien ingresa
+    conexion.registrar('ingreso', { usuario: u.nombre });
+    return conPermisos(u);
+  };
+  manejar('sesion:estado', () => ({
+    hayUsuarios: usuarios.hayUsuarios(),
+    usuarios: usuarios.listar({ incluirInactivos: false }).map((u) => ({ id: u.id, nombre: u.nombre, rol: u.rol, rol_nombre: u.rol_nombre, tiene_pin: u.tiene_pin })),
+    actual: sesion.usuario() ? conPermisos(usuarios.obtenerPorId(sesion.usuario().id)) : null,
+    negocio: conexion.leerAjustes().negocio
+  }));
+  manejar('sesion:crearPrimerAdmin', (d) => {
+    const r = usuarios.crearPrimerAdmin(d || {});
+    alIngresar(r.usuario);
+    return { usuario: conPermisos(r.usuario), codigoRecuperacion: r.codigoRecuperacion };
+  });
+  manejar('sesion:ingresar', (id, pin) => alIngresar(usuarios.verificar(id, pin)));
+  // Primera vez (o PIN reiniciado): la persona crea su PIN y queda adentro
+  manejar('sesion:crearMiPin', (id, pin) => alIngresar(usuarios.crearMiPin(id, pin)));
+  manejar('sesion:salir', () => { const u = sesion.usuario(); if (u) conexion.registrar('salida', { usuario: u.nombre }); sesion.cerrar(); return true; });
+  // Autorizar UNA acción con el PIN de quien tenga el permiso
+  manejar('sesion:autorizar', (permiso, pin) => {
+    const u = usuarios.autorizador(pin, permiso);
+    sesion.autorizar(u, permiso);
+    conexion.registrar('autorizacion', { permiso, autorizo: u.nombre });
+    return { autorizo: u.nombre };
+  });
+  manejar('sesion:recuperar', (codigo, adminId, pin) => usuarios.recuperar(codigo, adminId, pin));
+  manejar('sesion:cambiarMiPin', (actualPin, nuevo) => usuarios.cambiarMiPin(sesion.usuario().id, actualPin, nuevo));
+  manejar('usuarios:listar', () => usuarios.listar());
+  manejar('usuarios:crear', (d) => usuarios.crear(d || {}));
+  manejar('usuarios:actualizar', (id, c) => {
+    const r = usuarios.actualizar(id, c || {});
+    if (sesion.usuario() && sesion.usuario().id === id) sesion.iniciar(r);   // si cambió su propio rol
+    return r;
+  });
+  manejar('usuarios:reiniciarPin', (id) => usuarios.reiniciarPin(id));
 
   /* ---- reportes ---- */
   manejar('reportes:iva', (d, h) => reportes.iva(d, h));

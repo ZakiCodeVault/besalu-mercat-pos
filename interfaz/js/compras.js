@@ -315,6 +315,13 @@ async function formularioCompra(borrador, orden) {
       }
       if (l.producto_id && !l.costo && delProveedor.has(l.producto_id)) l.costo = delProveedor.get(l.producto_id).costo;
     }
+    // Patrón: si sus últimas facturas vienen seguidas, se adelanta el número siguiente
+    const fr = f ? f.facturas_recientes || [] : [];
+    numero.placeholder = fr[0] ? 'La última fue ' + fr[0] : 'Consecutivo de la factura';
+    if (f && !numero.value && fr.length >= 2 && Patrones.esSiguiente(fr[1], fr[0])) {
+      numero.value = Patrones.siguiente(fr[0]); numero.dataset.sugerido = '1';
+      infoProv.textContent += ' · número sugerido: sigue a ' + fr[0] + ' (cámbielo si no es)';
+    }
     actualizarListaProductos();
     pintarLineas();
   } });
@@ -322,6 +329,18 @@ async function formularioCompra(borrador, orden) {
   const numero = el('input', { value: b.numero_documento || '', placeholder: 'Consecutivo de la factura' });
   const fecha = el('input', { type: 'date', value: b.fecha || isoDia(new Date()) });
   const claveDoc = el('input', { value: b.clave || '', placeholder: '50 dígitos (opcional)' });
+  numero.addEventListener('input', () => { delete numero.dataset.sugerido; });
+  // Al pegar la clave de la factura electrónica salen el número, la fecha y la cédula del proveedor
+  claveDoc.addEventListener('input', () => {
+    const k = Patrones.leerClave(claveDoc.value);
+    if (!k) return;
+    if (!numero.value || numero.dataset.sugerido) { numero.value = k.numero; delete numero.dataset.sugerido; }
+    if (k.fecha <= isoDia(new Date())) fecha.value = k.fecha;
+    const act = enlace.actual();
+    if (act && act.identificacion !== k.cedula) toast('La clave es de la cédula ' + k.cedula, 'err', 'No coincide con ' + act.nombre + ': revise el proveedor');
+    else if (!act && !orden) { provId.value = k.cedula; enlace.cargar(k.cedula); }
+    toast('Clave leída', 'ok', 'Número ' + k.numero + ' · ' + fechaCorta(k.fecha));
+  });
   const otros = el('input', { inputmode: 'decimal', value: b.otros_cargos ? aColonesTexto(b.otros_cargos) : '', placeholder: '0' });
   const notas = el('input', { value: b.notas || '', placeholder: 'Opcional' });
   const listaProd = el('datalist', { id: 'dl-productos' });
@@ -360,7 +379,9 @@ async function formularioCompra(borrador, orden) {
     const ya = estado.lineas.find((l) => l.producto_id === p.id && (l.modo === 'existente' || l.modo === 'orden'));
     if (ya) { ya.cantidad = Math.round(((Number(ya.cantidad) || 0) + 1) * 1000) / 1000; ya.exacto = false; estado.enfocar = ya; pintarLineas(); return; }
     const deProv = delProveedor.get(p.id);
-    const l = Object.assign(lineaVacia(), { producto_id: p.id, texto: p.codigo + ' — ' + p.nombre, tarifa: p.tarifa_iva, costo: deProv ? deProv.costo : p.costo, cantidad: 1 });
+    // Patrón: la cantidad que se le compró la última vez a este proveedor (se reemplaza escribiendo)
+    const l = Object.assign(lineaVacia(), { producto_id: p.id, texto: p.codigo + ' — ' + p.nombre, tarifa: p.tarifa_iva, costo: deProv ? deProv.costo : p.costo,
+      cantidad: deProv && deProv.ultima_cantidad > 0 ? deProv.ultima_cantidad : 1 });
     estado.lineas.push(l); estado.enfocar = l; pintarLineas();
   }
   escaner.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); escanear(); } });

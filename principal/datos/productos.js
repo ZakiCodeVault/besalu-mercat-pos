@@ -139,8 +139,8 @@ function ajustarStock(id, stockContado, motivo) {
     if (!Number.isFinite(nuevo)) throw new Error('Cantidad inválida');
     const diferencia = Math.round((nuevo - p.stock) * 1000) / 1000;
     if (diferencia === 0) return obtenerPorId(id);
-    d.prepare(`INSERT INTO movimientos(producto_id, fecha, tipo, cantidad, costo_unitario, nota)
-               VALUES(?, ?, 'ajuste', ?, ?, ?)`).run(id, fechaLocal(), diferencia, p.costo, razon);
+    d.prepare(`INSERT INTO movimientos(producto_id, fecha, tipo, cantidad, costo_unitario, nota, usuario_id)
+               VALUES(?, ?, 'ajuste', ?, ?, ?, ?)`).run(id, fechaLocal(), diferencia, p.costo, razon, require('./sesion').usuarioId());
     registrar('ajuste_inventario', { id, nombre: p.nombre, antes: p.stock, despues: nuevo, motivo: razon });
     return obtenerPorId(id);
   })();

@@ -8,7 +8,9 @@
  *   compras    facturas de compra (entradas) y recepciones
  *   proveedores ficha de cada proveedor y los productos que se le compran
  *   ordenes    órdenes de compra a proveedores
- *   caja       turnos: apertura, arqueo y cierre
+ *   caja       turnos: apertura, relevos de cajero, arqueo y cierre
+ *   usuarios   usuarios con rol y PIN
+ *   sesion     quién está usando la app (para dejar constancia)
  *   reportes   IVA a pagar, balance, ventas, alertas
  *   respaldos  copias de seguridad verificadas
  *   migracionV1 importar productos de la versión 1.0.x
@@ -23,6 +25,8 @@ module.exports = {
   proveedores: require('./proveedores'),
   ordenes: require('./ordenes'),
   caja: require('./caja'),
+  usuarios: require('./usuarios'),
+  sesion: require('./sesion'),
   reportes: require('./reportes'),
   respaldos: require('./respaldos'),
   migracionV1: require('./migracionV1')

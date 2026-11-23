@@ -10,6 +10,8 @@ Thumbs.db
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+# Excepción: base de prueba hecha con la v2.4.0 (sin datos reales), para probar que las actualizaciones no pierden nada
+!pruebas/apoyo/base-v2.4.0.sqlite
 *.db
 respaldos/
 

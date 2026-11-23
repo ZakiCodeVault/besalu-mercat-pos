@@ -26,14 +26,30 @@ async function renderInventario() {
 
   const buscar = el('input', { placeholder: 'Buscar producto, código, SKU, marca o CABYS…', value: Inventario.texto, style: 'padding-left:40px' });
   const tb = el('tbody');
+  const mas = el('div', { class: 'mas-filas' });
+  // Se dibujan de a 200 (con miles de productos dibujar todos de una vez tarda): al bajar se agregan más
+  const POR_TANDA = 200;
+  let lista = [], dibujados = 0;
+  const dibujarTanda = () => {
+    const frag = document.createDocumentFragment();
+    for (const p of lista.slice(dibujados, dibujados + POR_TANDA)) frag.appendChild(filaProducto(p));
+    dibujados = Math.min(lista.length, dibujados + POR_TANDA);
+    tb.appendChild(frag);
+    mas.innerHTML = '';
+    if (dibujados < lista.length) mas.appendChild(el('button', { class: 'btn btn--ghost btn--sm', onclick: dibujarTanda }, 'Mostrar más (' + (lista.length - dibujados) + ' de ' + lista.length + ')'));
+  };
   const pintar = () => {
     const t = Inventario.texto.toLowerCase();
     tb.innerHTML = '';
-    const lista = productos.filter((p) => !t || p.nombre.toLowerCase().includes(t) || p.codigo.includes(t) || p.cabys.includes(t) ||
+    lista = productos.filter((p) => !t || p.nombre.toLowerCase().includes(t) || p.codigo.includes(t) || p.cabys.includes(t) ||
       (p.sku || '').toLowerCase().includes(t) || (p.marca || '').toLowerCase().includes(t));
-    if (!lista.length) tb.appendChild(el('tr', {}, el('td', { colspan: 8, class: 'mini', style: 'text-align:center;padding:30px', text: productos.length ? 'Sin resultados.' : 'Todavía no hay productos. Agregalos con "Agregar producto" o registrando una compra.' })));
-    for (const p of lista) tb.appendChild(filaProducto(p));
+    dibujados = 0;
+    if (!lista.length) { mas.innerHTML = ''; tb.appendChild(el('tr', {}, el('td', { colspan: 8, class: 'mini', style: 'text-align:center;padding:30px', text: productos.length ? 'Sin resultados.' : 'Todavía no hay productos. Agréguelos con "Agregar producto" o registrando una compra.' }))); return; }
+    dibujarTanda();
   };
+  // Al acercarse al final de la lista, carga la siguiente tanda sola
+  const vigia = new IntersectionObserver((e) => { if (e[0].isIntersecting && dibujados < lista.length) dibujarTanda(); }, { rootMargin: '400px' });
+  vigia.observe(mas);
   buscar.addEventListener('input', () => { Inventario.texto = buscar.value; pintar(); });
 
   root.appendChild(el('div', { class: 'card glass' }, [
@@ -47,8 +63,9 @@ async function renderInventario() {
         el('button', { class: 'btn btn--ghost', onclick: () => editarOrden(null, { sugerir: true }), title: 'Orden de compra con los productos bajo su mínimo' }, [icon('truck', 17), 'Pedir lo que falta']),
         el('button', { class: 'btn btn--accent', onclick: () => modalProducto() }, [icon('plus', 18), 'Agregar producto']),
         el('button', { class: 'btn btn--ghost btn--sm', onclick: () => exportarCsv('inventario') }, [icon('download', 16), 'Excel'])])]),
-    el('div', { class: 'tabla-wrap' }, el('table', {}, [
-      el('thead', {}, el('tr', {}, ['Producto', 'IVA', 'Costo', 'Precio', 'Margen', 'Existencia', 'Vence', ''].map((t, i) => el('th', { text: t, class: i > 0 && i < 7 ? 'der' : '' })))), tb]))
+    el('div', { class: 'tabla-wrap' }, el('table', { class: 'tabla-inv' }, [
+      el('thead', {}, el('tr', {}, ['Producto', 'IVA', 'Costo', 'Precio', 'Margen', 'Existencia', 'Vence', ''].map((t, i) => el('th', { text: t, class: i > 0 && i < 7 ? 'der' : '' })))), tb])),
+    mas
   ]));
   pintar();
 }
@@ -62,8 +79,9 @@ function filaProducto(p) {
   if (d !== null && d < 0) vence = el('span', { class: 'pill pill--red', text: 'Vencido' });
   else if (d !== null && d <= App.ajustes.venceDias) vence = el('span', { class: 'pill pill--amber', text: d + ' d' });
   return el('tr', { class: p.activo ? '' : 'tachado' }, [
-    el('td', {}, [el('div', { style: 'font-weight:600', text: p.nombre }), el('div', { class: 'mini' }, [p.codigo + (p.sku ? ' · SKU ' + p.sku : '') + (p.marca ? ' · ' + p.marca : '') + (p.cabys ? ' · CABYS ' + p.cabys : ''),
-      App.hacienda && App.hacienda.activo && !/^\d{13}$/.test(p.cabys || '') ? el('span', { class: 'pill pill--red', style: 'margin-left:6px', text: 'Sin CABYS: no se puede vender' }) : (p.cabys ? '' : ' · sin CABYS')])]),
+    el('td', { class: 'celda-producto' }, [el('div', { class: 'np', text: p.nombre }), el('div', { class: 'mini meta', title: p.codigo + (p.sku ? ' · SKU ' + p.sku : '') + (p.marca ? ' · ' + p.marca : '') + (p.cabys ? ' · CABYS ' + p.cabys : '') },
+      p.codigo + (p.sku ? ' · ' + p.sku : '') + (p.marca ? ' · ' + p.marca : '') + (p.cabys ? '' : ' · sin CABYS')),
+      App.hacienda && App.hacienda.activo && !/^\d{13}$/.test(p.cabys || '') ? el('span', { class: 'pill pill--red', style: 'margin-top:3px', text: 'Sin CABYS: no se puede vender' }) : null]),
     el('td', { class: 'der' }, el('span', { class: 'pill ' + (p.tarifa_iva === 13 ? '' : 'pill--accent'), text: p.tarifa_iva ? p.tarifa_iva + '%' : 'Exento' })),
     el('td', { class: 'der', text: money(p.costo) }),
     el('td', { class: 'der', text: money(p.precio) }),
@@ -102,13 +120,25 @@ function modalProducto(p) {
     if (i >= 0) marcas[i] = Object.assign(marcas[i], r); else marcas.push(r);
     marca.value = r.nombre; pintarLogo();
   }) }, [icon('upload', 14), 'Logo de la marca…']);
-  const codigo = el('input', { value: p.codigo, placeholder: 'Escaneá el código de barras' });
+  const codigo = el('input', { value: p.codigo, placeholder: 'Escanee el código de barras' });
   const nombre = el('input', { value: p.nombre });
+  // Patrón: productos sin código de barras (a granel, de la casa) llevan un código interno en serie
+  const internos = App.catalogo.map((x) => x.codigo).filter((c) => /[A-Za-z]/.test(c) && /\d$/.test(c));
+  const botonInterno = el('button', { class: 'link-btn link-btn--campo', type: 'button', onclick: () => {
+    codigo.value = Patrones.siguienteDeSerie(internos, Patrones.prefijoComun(internos) || 'BM-', 4); codigo.focus(); codigo.select();
+  } }, '¿No tiene código de barras? Crear un código interno');
   const cabys = el('input', { value: p.cabys, placeholder: '13 dígitos', inputmode: 'numeric', maxlength: 13 });
   const unidad = selector([['Unid', 'Unidad'], ['kg', 'Kilogramo'], ['g', 'Gramo'], ['L', 'Litro'], ['mL', 'Mililitro'], ['m', 'Metro']], p.unidad);
   const tarifa = selector(TARIFAS, p.tarifa_iva);
   const costo = el('input', { inputmode: 'decimal', value: p.costo ? aColonesTexto(p.costo) : '', placeholder: '0' });
-  const margen = el('input', { inputmode: 'decimal', value: '30', style: 'text-align:right' });
+  // Patrón: el margen de lo que ya vende (de la misma marca si hay varios), en vez de un 30 % fijo
+  const margenDe = (lista) => Patrones.mediana(lista.filter((x) => x.costo > 0 && x.precio > 0).map((x) => (x.precio / (1 + x.tarifa_iva / 100) - x.costo) / x.costo * 100));
+  const margenSugerido = () => {
+    const deMarca = App.catalogo.filter((x) => x.marca && p.marca && x.marca === p.marca);
+    const m = margenDe(deMarca.length >= 3 ? deMarca : App.catalogo);
+    return m == null || m < 1 || m > 300 ? 30 : Math.round(m);
+  };
+  const margen = el('input', { inputmode: 'decimal', value: String(margenSugerido()), style: 'text-align:right' });
   const precio = el('input', { inputmode: 'decimal', value: p.precio ? aColonesTexto(p.precio) : '', placeholder: '0', style: 'font-weight:700' });
   const stockIni = el('input', { inputmode: 'decimal', value: '0' });
   const minimo = el('input', { inputmode: 'decimal', value: String(p.stock_minimo || 0).replace('.', ',') });
@@ -142,10 +172,30 @@ function modalProducto(p) {
     renderInventario();
   };
 
+  // Patrón: el SKU sigue la serie de la marca (o la más usada): LCH-001 → LCH-002
+  sku.addEventListener('focus', () => {
+    if (sku.value) return;
+    const skus = App.catalogo.map((x) => x.sku).filter(Boolean);
+    const deMarca = App.catalogo.filter((x) => x.sku && x.marca && x.marca.toLowerCase() === marca.value.trim().toLowerCase()).map((x) => x.sku);
+    const pref = Patrones.prefijoComun(deMarca.length ? deMarca : skus);
+    if (pref != null) { sku.value = Patrones.siguienteDeSerie(skus, pref); sku.select(); }
+  });
+  // Patrón: un producto parecido (misma primera palabra) ya tiene CABYS, IVA y unidad
+  const parecido = el('div', { class: 'sugerencia-chip', hidden: true });
+  const buscarParecido = () => {
+    const palabra = nombre.value.trim().split(/\s+/)[0] || '';
+    const q = palabra.length >= 4 && !cabys.value ? App.catalogo.find((x) => x.id !== p.id && /^\d{13}$/.test(x.cabys || '') && x.nombre.toLowerCase().startsWith(palabra.toLowerCase())) : null;
+    parecido.hidden = !q;
+    if (!q) return;
+    parecido.innerHTML = '';
+    parecido.append(el('span', { text: 'Igual que "' + q.nombre + '": CABYS ' + q.cabys + ' · IVA ' + q.tarifa_iva + '% · ' + q.unidad }),
+      el('button', { class: 'btn btn--ghost btn--sm', type: 'button', onclick: () => { cabys.value = q.cabys; tarifa.value = String(q.tarifa_iva); unidad.value = q.unidad; parecido.hidden = true; calcular(); } }, 'Usar'));
+  };
+  nombre.addEventListener('input', debounce(buscarParecido, 250));
   abrirModal(el('div', { class: 'modal' }, [
     el('h2', { text: nuevo ? 'Agregar producto' : 'Editar producto' }),
-    el('div', { class: 'g2' }, [campo('Código de barras', codigo), campo('CABYS (Hacienda)', cabys)]),
-    campo('Nombre', nombre),
+    el('div', { class: 'g2' }, [el('div', {}, [campo('Código de barras', codigo), nuevo ? botonInterno : null]), campo('CABYS (Hacienda)', cabys)]),
+    campo('Nombre', nombre), parecido,
     listaMarcas,
     el('div', { class: 'g2' }, [campo('SKU', sku), campo('Marca', marca)]),
     el('div', { style: 'display:flex;gap:10px;align-items:center;justify-content:flex-end;margin:-6px 0 12px' }, [estadoLogo, botonLogo]),

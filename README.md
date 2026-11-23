@@ -5,7 +5,14 @@ Sistema de punto de venta y facturación para **Besalú Mercat — Minimarket Go
 **SQLite** en la propia computadora, **envía cada comprobante directo a
 Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHub.
 
-- Una sede, una caja. Sin login.
+- Una sede, una caja. Cada persona entra con **su usuario y su PIN**, según su
+  rol (administrador, encargado o vendedor), y queda registrado quién hizo
+  cada venta, devolución, compra y movimiento.
+- **Relevo de cajero sin cerrar la caja**: el que entrega cuenta el efectivo y
+  el que recibe empieza con eso; el cierre Z muestra la diferencia de cada uno.
+- **Actualizar no arriesga los datos**: antes de cambiar la base se hace una
+  copia verificada, el cambio va en un solo paso que se deshace si algo falla,
+  y se comprueba registro por registro que no se perdió ni cambió nada.
 - Registra **todas** las ventas (tiquetes, facturas y notas de crédito) y
   **todas** las compras a proveedores, con su inventario.
 - **Órdenes de compra** a proveedores: se piden, se mandan en PDF y la
@@ -46,15 +53,17 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 9. [Órdenes de compra y entrada de mercadería](#órdenes-de-compra-y-entrada-de-mercadería)
 10. [Proveedores y compra rápida](#proveedores-y-compra-rápida)
 11. [Etiquetas (SAT TT448-2)](#etiquetas-sat-tt448-2)
-12. [Hacienda: conexión propia](#hacienda-conexión-propia)
-13. [Factura al correo del cliente](#factura-al-correo-del-cliente)
-14. [Trabajar en el código](#trabajar-en-el-código)
-15. [Pruebas](#pruebas)
-16. [Publicar una versión nueva](#publicar-una-versión-nueva)
-17. [Rendimiento](#rendimiento)
-18. [Atajos de teclado](#atajos-de-teclado)
-19. [Seguridad](#seguridad)
-20. [Pendientes](#pendientes)
+12. [Usuarios, roles y relevo de caja](#usuarios-roles-y-relevo-de-caja)
+13. [Actualizar sin arriesgar los datos](#actualizar-sin-arriesgar-los-datos)
+14. [Hacienda: conexión propia](#hacienda-conexión-propia)
+15. [Factura al correo del cliente](#factura-al-correo-del-cliente)
+16. [Trabajar en el código](#trabajar-en-el-código)
+17. [Pruebas](#pruebas)
+18. [Publicar una versión nueva](#publicar-una-versión-nueva)
+19. [Rendimiento](#rendimiento)
+20. [Atajos de teclado](#atajos-de-teclado)
+21. [Seguridad](#seguridad)
+22. [Pendientes](#pendientes)
 
 ---
 
@@ -68,8 +77,9 @@ Hacienda** (conexión propia, sin proveedor) y se **actualiza solo** desde GitHu
 | **Inventario** (F4) | Productos con CABYS, tarifa de IVA, costo, precio y existencia. **Kárdex** por producto (cada entrada y salida con su documento). Ajustes de inventario con motivo (conteo físico, merma, vencido…). Alertas de stock bajo y vencimientos. Lo que viene **en camino** en órdenes de compra y **Pedir lo que falta** (arma la orden con lo que está bajo el mínimo). **SKU** y **marca** de cada producto, con el **logo de la marca** para las etiquetas. |
 | **Etiquetas** (F8) | Plantillas listas (producto con marca, precio de góndola, código de barras, oferta, vencimiento/lote) en 50 × 25, 40 × 30, 60 × 40, 100 × 50 mm u otro tamaño. Se escanean los productos, se ponen las copias y se imprime en la SAT TT448-2. Vista previa exacta de lo que sale. Ver [Etiquetas](#etiquetas-sat-tt448-2). |
 | **Reportes** (F5) | **IVA a pagar** del período (débito − crédito) y desglose por tarifa. Ventas netas, costo de lo vendido, utilidad, compras. **Entradas y salidas** de inventario. Ventas por día, medios de pago, más vendidos. Exportar ventas, compras e IVA a Excel. |
-| **Cierre** (F6) | Turno de caja: fondo inicial, ventas por medio de pago, arqueo de efectivo (esperado vs. contado) y cierre con **reporte Z**. Al cerrar se hace un respaldo automático. |
-| **Ajustes** (F7) | **Conexión con Hacienda** (ambiente, usuario y contraseña de la API, llave .p12 y PIN), **correo SMTP** para enviar las facturas, datos del negocio emisor (cédula, actividad económica, ubicación, sucursal, terminal), impresión, respaldos y restauración, **copia completa** (exportar y cargar), **exportar todo a Excel**, verificación de integridad, bitácora y actualizaciones. |
+| **Cierre** (F6) | Turno de caja: fondo inicial, ventas por medio de pago, **cajeros del turno** (relevos con lo que recibió, esperado, contado y diferencia de cada uno), arqueo de efectivo y cierre con **reporte Z** por cajero. Al cerrar se hace un respaldo automático. |
+| **Ingreso** | Cada persona elige su perfil y pone su PIN (la primera vez lo crea). Arriba a la derecha: cambiar de usuario, **relevo de caja** y cambiar mi PIN. Ver [Usuarios y relevo de caja](#usuarios-roles-y-relevo-de-caja). |
+| **Ajustes** (F7) | **Usuarios** (crear perfiles, rol, correo, desactivar, reiniciar el PIN). **Conexión con Hacienda** (ambiente, usuario y contraseña de la API, llave .p12 y PIN), **correo SMTP** para enviar las facturas, datos del negocio emisor (cédula, actividad económica, ubicación, sucursal, terminal), impresión, respaldos y restauración, **copia completa** (exportar y cargar), **exportar todo a Excel**, verificación de integridad, bitácora y actualizaciones. |
 
 ---
 
@@ -140,6 +150,7 @@ Además:
 ```
 besalu-mercat-pos/
 ├── principal/                  ← El sistema (proceso principal de Electron)
+│   ├── revision-proceso.js     ← Revisa la base en un proceso aparte al abrir (solo lectura).
 │   ├── main.js                 ← Abre la ventana y la base, imprime, respaldo diario,
 │   │                             actualizaciones.
 │   ├── seguridad.js            ← Sandbox, origen del IPC, navegación, permisos y
@@ -153,7 +164,11 @@ besalu-mercat-pos/
 │   │                             y envío por USB (cola RAW de Windows) o por la red.
 │   ├── datos/                  ← Toda la lógica de datos y reglas fiscales
 │   │   ├── esquema.js          ← Tablas, restricciones y triggers de protección.
-│   │   ├── conexion.js         ← Abrir/cerrar SQLite, ajustes, bitácora, integridad.
+│   │   ├── conexion.js         ← Abrir/cerrar SQLite, actualizaciones verificadas de la base,
+│   │   │                         ajustes y bitácora.
+│   │   ├── revision.js         ← Revisión completa (archivo, kárdex, consecutivos).
+│   │   ├── usuarios.js         ← Usuarios, rol, PIN, permisos y recuperación.
+│   │   ├── sesion.js           ← Quién está usando la app (para dejar constancia).
 │   │   ├── montos.js           ← IVA por línea, consecutivo, clave, fechas.
 │   │   ├── productos.js        ← Catálogo (con SKU y marca), ajustes de inventario y kárdex.
 │   │   ├── marcas.js           ← Marcas y su logo para las etiquetas.
@@ -162,7 +177,7 @@ besalu-mercat-pos/
 │   │   ├── compras.js          ← Facturas de proveedores, recepciones y anulaciones.
 │   │   ├── ordenes.js          ← Órdenes de compra: borrador, emitir, avance, cerrar,
 │   │   │                         cancelar, en camino y qué pedir.
-│   │   ├── caja.js             ← Turnos, arqueo y cierre Z.
+│   │   ├── caja.js             ← Turnos, relevos de cajero, arqueo y cierre Z.
 │   │   ├── reportes.js         ← IVA, balance, ventas, inventario, alertas.
 │   │   ├── respaldos.js        ← Copias verificadas, copia completa y cargar una copia.
 │   │   └── migracionV1.js      ← Importar productos de la versión 1.
@@ -184,6 +199,8 @@ besalu-mercat-pos/
 │   ├── fuentes/                ← Tipografías locales (Inter y Playfair Display).
 │   └── js/
 │       ├── utilidades.js       ← Íconos, formato de colones, modales, confirmaciones.
+│       ├── sesion.js           ← Ingreso con PIN, usuarios, autorizaciones y relevo de caja.
+│       ├── patrones.js         ← Adelanta números (series, clave de 50 dígitos, tipo de cédula).
 │       ├── app.js              ← Arranque, navegación y atajos.
 │       ├── caja.js · ventas.js · compras.js · inventario.js
 │       ├── ordenes.js          ← Órdenes de compra: lista, borrador, detalle y recepción.
@@ -197,9 +214,13 @@ besalu-mercat-pos/
 │       ├── graficos.js         ← Gráfico de ventas por día.
 │       └── actualizaciones.js  ← Aviso "Versión X lista → Reiniciar y actualizar".
 │
-├── recursos/                   ← Ícono, imagen y licencia del instalador.
+├── recursos/                   ← Ícono (.ico y .png), imagen y licencia del instalador.
+├── herramientas/
+│   └── generar-icono.js        ← Genera el ícono y la imagen del instalador con el logo.
 ├── pruebas/
+│   ├── actualizacion.prueba.js ← Una base de la v2.4.0 se actualiza sin perder ni cambiar nada.
 │   ├── datos.prueba.js         ← Reglas fiscales, protecciones, respaldos, velocidad.
+│   ├── usuarios.prueba.js      ← Usuarios, PIN, permisos, autorizaciones y relevos de caja.
 │   ├── inventario.prueba.js    ← Órdenes de compra, recepciones, existencias, copias y Excel.
 │   ├── etiquetas.prueba.js     ← Proveedores, marcas y SKU, códigos de barras, TSPL/ZPL y envío.
 │   ├── hacienda.prueba.js      ← XML, firma, envío, rechazos, Mensaje Receptor, sin internet,
@@ -207,6 +228,7 @@ besalu-mercat-pos/
 │   ├── correo.prueba.js        ← Factura al correo: adjuntos, PDF, reintentos, TLS.
 │   ├── app.prueba.js           ← La app real de punta a punta (incluye la seguridad de la pantalla).
 │   └── apoyo/                  ← Lo que usan las pruebas (nada de esto va en el instalador)
+│       ├── base-v2.4.0.sqlite  ← Base hecha con la v2.4.0 (para probar la actualización).
 │       ├── hacienda-simulada.js ← Servidor que imita a Hacienda (verifica firma y XSD).
 │       ├── smtp-simulado.js    ← Servidor de correo local (plano, SSL/TLS y STARTTLS).
 │       ├── llave-prueba.js     ← Genera una llave .p12 falsa para probar.
@@ -251,6 +273,8 @@ IVA, el consecutivo y la clave los calcula el sistema con los datos de la base.
 | `ordenes_compra` / `orden_compra_lineas` | Órdenes a proveedores: número `OC-…`, estado (borrador, emitida, cerrada, cancelada), entrega esperada, productos, cantidades y costos. Lo recibido no se guarda aparte: sale de las compras vigentes ligadas a cada línea (vista `orden_compra_avance`), así que anular una recepción lo devuelve a pendiente solo. |
 | `proveedor_productos` | Lo que se le compra a cada proveedor: último costo, fecha de la última compra y el código que usa el proveedor. Se llena solo con cada compra. |
 | `marcas` | Marcas con su logo (PNG en grises, dentro de la base) y la intensidad con que se imprime. |
+| `usuarios` | Perfiles: nombre, rol, correo, PIN (solo su hash) y si está activo. |
+| `caja_tramos` | Quién tuvo el efectivo de la caja en cada parte del turno: lo que recibió, lo esperado, lo contado y la diferencia (relevos). |
 | `movimientos` | Kárdex: cada entrada y salida de inventario con su documento. La existencia de cada producto es la suma de sus movimientos. |
 | `secuencias` · `secuencias_receptor` | Último número usado por tipo de comprobante (01, 03, 04) y de mensaje (05, 06, 07). |
 | `turnos` | Turnos de caja con fondo, esperado, contado y diferencia. |
@@ -308,6 +332,10 @@ de Windows.
 
 ## Primer uso
 
+0. **Crear el administrador** (la primera vez, o al actualizar desde una versión
+   anterior a la 5): nombre del perfil y PIN. Guardar el **código de
+   recuperación** que aparece. Después, en *Ajustes → Usuarios*, crear los
+   perfiles de los vendedores: cada uno crea su PIN la primera vez que entra.
 1. La app abre en **Ajustes**: completar nombre, **cédula** del negocio,
    **actividad económica**, provincia, cantón, distrito, dirección, teléfono y
    correo, y tocar **Guardar cambios**. Sin cédula no se pueden emitir
@@ -380,6 +408,22 @@ Al registrar una compra (o una orden):
 Al importar el XML de un proveedor, los productos que él factura con su propio
 código se reconocen solos desde la segunda vez.
 
+**Adelanta los números cuando hay un patrón** (siempre se puede escribir otra cosa):
+
+| Dónde | Qué sugiere |
+|---|---|
+| Número de factura | El siguiente, si las últimas facturas de ese proveedor vienen seguidas |
+| Clave de 50 dígitos | Al pegarla salen el número, la fecha y la cédula del proveedor (avisa si no coincide) |
+| Cantidad al escanear | La que se le compró la última vez a ese proveedor |
+| SKU y código interno | El siguiente de la serie (LCH-001 → LCH-002, BM-0007 → BM-0008) |
+| Margen del producto nuevo | El de los productos de esa marca (o el de todos) |
+| CABYS, IVA y unidad | Los de un producto parecido, con un toque |
+| Tipo de identificación | Por la forma del número (9 dígitos física, 10 que empieza con 3 jurídica…) |
+| Fondo al abrir la caja | El del turno anterior |
+
+En las ventanas de ingreso de datos el título y los botones quedan siempre a
+la vista, y la ventana baja sola hasta el campo donde se está escribiendo.
+
 ---
 
 ## Etiquetas (SAT TT448-2)
@@ -425,6 +469,73 @@ el lector de la caja lo lea igual: EAN-13, UPC-A o EAN-8 si el código es válid
 y Code 128 para códigos internos. Las barras nunca son más delgadas de 0,25 mm
 (2 puntos); si en un tamaño chico no caben, la etiqueta se reacomoda o imprime
 el número (y la vista previa lo avisa).
+
+---
+
+## Usuarios, roles y relevo de caja
+
+**Ingreso.** Al abrir la app se elige el perfil y se pone el PIN (4 a 8
+números, con teclado en pantalla). El administrador crea los perfiles en
+*Ajustes → Usuarios* (nombre, rol y correo) **sin PIN**: la primera vez que la
+persona entra a su perfil, **crea su propio PIN**. Nadie más lo conoce; si lo
+olvida, el administrador lo reinicia y la persona crea otro. Para cambiar de
+persona: arriba a la derecha → *Cambiar de usuario*.
+
+| Rol | Puede |
+|---|---|
+| Administrador | Todo, incluidos Ajustes, Hacienda, respaldos y usuarios |
+| Encargado | Vender, devoluciones, compras, inventario, etiquetas, reportes y cerrar la caja |
+| Vendedor | Vender, consultar inventario, imprimir etiquetas y hacer el relevo |
+
+- Lo que el rol no permite lo puede **autorizar** ahí mismo un encargado o el
+  administrador con su PIN (solo esa vez): queda en el comprobante y en la
+  bitácora quién lo hizo y quién lo autorizó.
+- Los permisos los revisa el sistema en cada operación, no solo la pantalla.
+- 5 PIN equivocados bloquean ese perfil 60 segundos. El PIN se guarda solo
+  como hash (scrypt); dos personas no pueden tener el mismo PIN.
+- Al crear el administrador (la primera vez con la versión 5) se muestra un
+  **código de recuperación** una sola vez: sirve para poner un PIN nuevo de
+  administrador si se olvida (en el ingreso: *¿Olvidó el PIN de administrador?*).
+- Siempre queda al menos un administrador activo. Un usuario no se borra: se
+  desactiva (su historia queda).
+
+**Relevo de caja (sin cerrar la caja).** Arriba a la derecha → *Relevo de
+caja* (o en Cierre):
+
+1. El que entrega **cuenta el efectivo** (sin ver cuánto debería haber).
+2. El que recibe elige su perfil y pone **su PIN**: empieza con lo contado.
+3. Sale el comprobante del relevo (entrega, recibe, esperado, contado y
+   diferencia, con espacio para las dos firmas).
+
+Desde ese momento las ventas quedan a nombre de quien las hace y en el
+efectivo de quien tiene la caja. El **cierre Z** muestra el turno completo y,
+por cada cajero, lo que recibió, lo esperado, lo contado y su diferencia (la
+suma de las diferencias es la del turno). Una caja que estaba abierta al
+actualizar a la versión 5 queda a cargo de la primera persona que ingresa.
+
+---
+
+## Actualizar sin arriesgar los datos
+
+Cada versión nueva puede agregar tablas o columnas a la base. Al abrir la app
+actualizada:
+
+1. Se hace una **copia completa** de la base al lado
+   (`antes-de-migrar-vN-fecha.sqlite`) y se comprueba que abre, está sana y es
+   **idéntica** a la base. Si no se puede (por ejemplo, disco lleno), no se
+   cambia nada.
+2. Todos los cambios van en **una sola transacción**.
+3. Antes de confirmarla se compara, tabla por tabla y registro por registro,
+   que **ningún dato que ya existía se perdió o cambió** y que no quedan
+   registros huérfanos. Si algo no cuadra, se deshace todo.
+4. Si la actualización no se pudo aplicar, la app avisa y se cierra con los
+   datos tal como estaban. **Nunca** ofrece reemplazarlos por un respaldo
+   (eso solo se ofrece si el archivo está dañado).
+
+La prueba `prueba:actualizacion` parte de una base creada con el código de la
+v2.4.0 (proveedores, compras, una anulada, una orden recibida en parte, ventas,
+nota de crédito, marcas con logo y la caja abierta) y comprueba que la versión
+actual la actualiza sin cambiar un solo dato y sigue funcionando sobre ella.
 
 ---
 
@@ -655,13 +766,15 @@ donde se esté trabajando, y no se buscan actualizaciones.
 ## Pruebas
 
 ```bash
-npm run prueba            # las seis juntas (222 pruebas)
+npm run prueba            # todas juntas (246 pruebas)
+npm run prueba:actualizacion # 6 pruebas: una base de la v2.4.0 se actualiza sin perder nada
 npm run prueba:datos      # 40 pruebas de reglas fiscales y protecciones
+npm run prueba:usuarios   # 9 pruebas de usuarios, PIN, permisos y relevos de caja
 npm run prueba:inventario # 24 pruebas de órdenes de compra, existencias y copias
 npm run prueba:etiquetas  # 19 pruebas de proveedores, marcas, códigos de barras e impresión
 npm run prueba:hacienda   # 50 pruebas de la conexión con Hacienda
 npm run prueba:correo     # 25 pruebas del envío de facturas por correo
-npm run prueba:app        # 64 pruebas con la app real, de punta a punta
+npm run prueba:app        # 73 pruebas con la app real, de punta a punta
 ```
 
 Todas usan una carpeta temporal y **no tocan** los datos del negocio. Las de
@@ -783,6 +896,8 @@ Medido con las pruebas:
 | Acción | Tiempo |
 |---|---|
 | Emitir una venta (comprobante + inventario + bitácora, guardado en disco) | ~0,5 ms |
+| Abrir la app con una base de un año (3 000 productos, 50 000 ventas, 56 MB) hasta la pantalla lista | ~0,4 s (antes 1,1 s) |
+| Revisión completa de la base al abrir (en un proceso aparte, sin trabar la caja) | ~1 s |
 | Abrir la app con 1.000+ ventas | ~70 ms |
 | Todos los reportes sobre 2.000+ ventas | ~8 ms |
 | Recorrer todas las pantallas | ~35 ms |
@@ -793,7 +908,7 @@ Medido con las pruebas:
 
 | Tecla | Acción |
 |---|---|
-| F1 – F7 | Caja, Ventas, Compras, Inventario, Reportes, Cierre, Ajustes |
+| F1 – F7 | Caja, Ventas, Compras, Inventario, Reportes, Cierre, Ajustes (solo las que el rol permite) |
 | F8 | Etiquetas |
 | Enter (en el buscador) | Agregar el producto escaneado |
 | Enter (buscador vacío) | Ir a cobrar |
@@ -804,6 +919,12 @@ Medido con las pruebas:
 ---
 
 ## Seguridad
+
+**Usuarios**
+- Cada operación revisa en el sistema el rol de quien la pide (la pantalla
+  solo oculta lo que no le toca). Sin ingresar no se puede pedir nada.
+- PIN guardado solo como hash scrypt con sal; 5 intentos fallidos bloquean
+  ese perfil 60 segundos; el código de recuperación también se guarda como hash.
 
 **Datos y secretos**
 - Contraseñas de Hacienda y del correo, llave `.p12` y PIN: **cifrados con la

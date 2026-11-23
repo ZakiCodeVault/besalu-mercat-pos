@@ -61,8 +61,12 @@ function obtenerPorId(id) {
   const p = d.prepare('SELECT * FROM proveedores WHERE id = ?').get(id);
   if (!p) return null;
   p.usos = usos(d, p.id);
+  // Para adelantar números: sus últimas facturas (de la más nueva a la más vieja)
+  p.facturas_recientes = d.prepare('SELECT numero_documento FROM compras WHERE proveedor_id = ? ORDER BY id DESC LIMIT 3').all(p.id).map((f) => f.numero_documento);
   p.productos = d.prepare(`
     SELECT pp.producto_id, pp.codigo_proveedor, pp.costo, pp.ultima_compra,
+           (SELECT cl.cantidad FROM compra_lineas cl JOIN compras c ON c.id = cl.compra_id
+            WHERE c.proveedor_id = pp.proveedor_id AND cl.producto_id = pp.producto_id AND c.estado = 'vigente' ORDER BY c.id DESC LIMIT 1) AS ultima_cantidad,
            x.codigo, x.nombre, x.unidad, x.tarifa_iva, x.precio, x.costo AS costo_promedio, x.stock, x.stock_minimo, x.activo
     FROM proveedor_productos pp JOIN productos x ON x.id = pp.producto_id
     WHERE pp.proveedor_id = ? ORDER BY x.activo DESC, x.nombre COLLATE NOCASE`).all(p.id);

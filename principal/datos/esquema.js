@@ -551,6 +551,75 @@ const MIGRACIONES = [
     FROM compra_lineas cl JOIN compras c ON c.id = cl.compra_id
     WHERE cl.producto_id IS NOT NULL AND c.estado = 'vigente'
     GROUP BY c.proveedor_id, cl.producto_id;
+  `,
+
+  /* ===== Versión 7: usuarios con rol y relevos de cajero dentro del turno ===== */
+  `
+  -- Quien usa la app. Cada persona crea su propio PIN la primera vez que ingresa
+  -- (mientras tanto pin_hash es NULL). Se guarda solo como hash (scrypt con sal propia).
+  CREATE TABLE usuarios(
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre         TEXT NOT NULL CHECK(length(trim(nombre)) BETWEEN 1 AND 60),
+    rol            TEXT NOT NULL CHECK(rol IN ('admin','encargado','cajero')),
+    pin_hash       TEXT CHECK(pin_hash IS NULL OR length(pin_hash) = 64),
+    pin_sal        TEXT CHECK(pin_sal IS NULL OR length(pin_sal) = 32),
+    correo         TEXT NOT NULL DEFAULT '',
+    activo         INTEGER NOT NULL DEFAULT 1 CHECK(activo IN (0, 1)),
+    creado_en      TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    actualizado_en TEXT NOT NULL DEFAULT '',
+    ultimo_ingreso TEXT NOT NULL DEFAULT '',
+    CHECK((pin_hash IS NULL) = (pin_sal IS NULL))
+  );
+  CREATE UNIQUE INDEX usuarios_nombre ON usuarios(nombre COLLATE NOCASE);
+  -- Un usuario con historia no se borra: se desactiva
+  CREATE TRIGGER usuarios_no_borrar BEFORE DELETE ON usuarios
+  BEGIN SELECT RAISE(ABORT, 'Un usuario no se borra: se desactiva'); END;
+
+  -- Tramos de caja: quién tuvo el efectivo de la caja y con cuánto empezó.
+  -- Un relevo cierra el tramo del que sale (con lo contado) y abre el del que
+  -- entra (recibe lo contado), sin cerrar el turno.
+  CREATE TABLE caja_tramos(
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    turno_id    INTEGER NOT NULL REFERENCES turnos(id),
+    usuario_id  INTEGER NOT NULL REFERENCES usuarios(id),
+    inicio      TEXT NOT NULL,
+    recibido    INTEGER NOT NULL CHECK(recibido >= 0),
+    origen      TEXT NOT NULL DEFAULT 'apertura' CHECK(origen IN ('apertura','relevo','continuacion')),
+    fin         TEXT,
+    esperado    INTEGER,
+    contado     INTEGER CHECK(contado IS NULL OR contado >= 0),
+    diferencia  INTEGER,
+    entrega_a   INTEGER REFERENCES usuarios(id),
+    CHECK((fin IS NULL) = (contado IS NULL)),
+    CHECK(fin IS NULL OR diferencia = contado - esperado)
+  );
+  CREATE UNIQUE INDEX caja_tramo_abierto ON caja_tramos(turno_id) WHERE fin IS NULL;
+  CREATE INDEX caja_tramos_turno ON caja_tramos(turno_id);
+  CREATE TRIGGER caja_tramos_cerrados BEFORE UPDATE ON caja_tramos WHEN OLD.fin IS NOT NULL
+  BEGIN SELECT RAISE(ABORT, 'Tramo de caja cerrado: no se puede modificar'); END;
+  CREATE TRIGGER caja_tramos_no_borrar BEFORE DELETE ON caja_tramos
+  BEGIN SELECT RAISE(ABORT, 'Tramo de caja: no se puede borrar'); END;
+  CREATE TRIGGER caja_tramos_turno_abierto BEFORE INSERT ON caja_tramos
+  WHEN (SELECT cerrado_en FROM turnos WHERE id = NEW.turno_id) IS NOT NULL
+  BEGIN SELECT RAISE(ABORT, 'El turno de caja ya está cerrado'); END;
+
+  -- Quién hizo cada cosa (lo anterior a esta versión queda sin usuario)
+  ALTER TABLE comprobantes ADD COLUMN usuario_id INTEGER REFERENCES usuarios(id);
+  ALTER TABLE comprobantes ADD COLUMN tramo_id INTEGER REFERENCES caja_tramos(id);
+  ALTER TABLE comprobantes ADD COLUMN autorizado_por INTEGER REFERENCES usuarios(id);
+  ALTER TABLE compras ADD COLUMN usuario_id INTEGER REFERENCES usuarios(id);
+  ALTER TABLE movimientos ADD COLUMN usuario_id INTEGER REFERENCES usuarios(id);
+  ALTER TABLE turnos ADD COLUMN abierto_por INTEGER REFERENCES usuarios(id);
+  ALTER TABLE turnos ADD COLUMN cerrado_por INTEGER REFERENCES usuarios(id);
+  ALTER TABLE bitacora ADD COLUMN usuario TEXT NOT NULL DEFAULT '';
+  CREATE TRIGGER comprobantes_usuario_inmutable BEFORE UPDATE OF usuario_id, tramo_id, autorizado_por ON comprobantes
+  WHEN OLD.usuario_id IS NOT NEW.usuario_id OR OLD.tramo_id IS NOT NEW.tramo_id OR OLD.autorizado_por IS NOT NEW.autorizado_por
+  BEGIN SELECT RAISE(ABORT, 'Comprobante emitido: no se puede cambiar quién lo hizo'); END;
+  CREATE TRIGGER compras_usuario_inmutable BEFORE UPDATE OF usuario_id ON compras WHEN OLD.usuario_id IS NOT NEW.usuario_id
+  BEGIN SELECT RAISE(ABORT, 'Compra registrada: no se puede cambiar quién la hizo'); END;
+  CREATE INDEX comprobantes_turno ON comprobantes(turno_id);
+  CREATE INDEX comprobantes_tramo ON comprobantes(tramo_id) WHERE tramo_id IS NOT NULL;
+  CREATE INDEX comprobantes_usuario ON comprobantes(usuario_id) WHERE usuario_id IS NOT NULL;
   `
 ];
 

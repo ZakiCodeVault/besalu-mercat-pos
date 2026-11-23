@@ -7,7 +7,8 @@
  *   3. Abre la ventana del POS.
  *   4. Hace el respaldo diario y busca actualizaciones.
  */
-const { app, BrowserWindow, Menu, ipcMain, dialog, safeStorage, Notification } = require('electron');
+const T0 = Date.now();
+const { app, BrowserWindow, Menu, ipcMain, dialog, safeStorage, Notification, utilityProcess } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const log = require('electron-log');
@@ -16,6 +17,13 @@ const datos = require('./datos');
 const ipc = require('./ipc');
 const seguridad = require('./seguridad');
 const hacienda = require('./hacienda/conector');
+
+/** Tiempos del arranque (quedan en el registro; con BESALU_MEDIR=1 también en la consola). */
+const tiempos = [['módulos cargados', Date.now() - T0]];
+function marcar(etapa) {
+  tiempos.push([etapa, Date.now() - T0]);
+  if (process.env.BESALU_MEDIR === '1') console.log('[arranque] ' + etapa + ': ' + (Date.now() - T0) + ' ms');
+}
 
 log.transports.file.level = 'info';
 log.hooks.push(seguridad.filtroRegistro);   // nunca escribir tokens ni contraseñas en el registro
@@ -38,19 +46,54 @@ function abrirBase(carpeta) {
     datos.conexion.abrir(carpeta);
   } catch (e) {
     log.error('[datos] no abre', e);
+    if (e.codigo === 'MIGRACION') {
+      // La actualización del esquema no se aplicó y la base quedó como estaba:
+      // NUNCA se reemplaza por un respaldo (se perdería lo ingresado después).
+      dialog.showErrorBox('Besalú Mercat POS', e.message + (e.copia ? '\n\nCopia de seguridad hecha antes de intentarlo:\n' + e.copia : '') +
+        '\n\nLa app se va a cerrar. Sus datos están a salvo: no se borró ni se cambió nada.');
+      throw e;
+    }
+    // Solo un archivo realmente dañado se puede reemplazar por el último respaldo
+    const danada = /SQLITE_(CORRUPT|NOTADB)/.test(String(e.code || '')) || /malformed|not a database/i.test(String(e.message));
+    if (!danada) { dialog.showErrorBox('Besalú Mercat POS', 'No se pudo abrir la base de datos:\n' + e.message + '\n\nSus datos no se tocaron.'); throw e; }
     if (!recuperarDesdeRespaldo(carpeta, e)) throw e;
     datos.conexion.abrir(carpeta);
   }
   datos.respaldos.configurar(carpeta);
-  const v = datos.conexion.verificarIntegridad();
-  if (!v.ok && v.problemas.every((p) => p.startsWith('Stock de'))) {
-    datos.conexion.repararStock();            // el kárdex manda
-    estadoInicio.integridad = datos.conexion.verificarIntegridad();
-  } else {
-    estadoInicio.integridad = v;
-  }
-  if (!estadoInicio.integridad.ok) log.error('[integridad]', estadoInicio.integridad.problemas);
   log.info('[datos] base en', datos.conexion.rutaArchivo());
+}
+
+/**
+ * Revisión completa de la base, en un proceso aparte y con conexión de solo
+ * lectura: la ventana abre de una vez y la caja no se traba mientras revisa.
+ * Si solo hay existencias descuadradas, se corrigen desde el kárdex (el kárdex manda).
+ */
+function revisarBaseEnSegundoPlano() {
+  const terminar = (v) => {
+    if (!v.ok && v.problemas.every((p) => p.startsWith('Stock de'))) {
+      datos.conexion.repararStock();
+      v = datos.conexion.verificarIntegridad();
+    }
+    estadoInicio.integridad = v;
+    if (!v.ok) log.error('[integridad]', v.problemas);
+    marcar('base revisada');
+    enviar('integridad', v);
+  };
+  const enEsteProceso = () => { try { terminar(datos.conexion.verificarIntegridad()); } catch (e) { log.error('[integridad]', e); } };
+  try {
+    const hijo = utilityProcess.fork(path.join(__dirname, 'revision-proceso.js'), [], { serviceName: 'Revisión de la base de datos' });
+    let listo = false;
+    hijo.on('message', (m) => {
+      listo = true;
+      if (m && m.ok) terminar(m.resultado);
+      else { log.warn('[integridad] proceso aparte:', m && m.error); enEsteProceso(); }
+    });
+    hijo.on('exit', () => { if (!listo) { log.warn('[integridad] el proceso aparte terminó sin responder'); enEsteProceso(); } });
+    hijo.postMessage({ ruta: datos.conexion.rutaArchivo(), fecha: datos.montos.fechaLocal() });
+  } catch (e) {
+    log.warn('[integridad] sin proceso aparte', e);
+    enEsteProceso();
+  }
 }
 
 /** Si la base está dañada, ofrece reemplazarla por el respaldo más reciente. */
@@ -106,7 +149,10 @@ function crearVentana() {
   });
   Menu.setApplicationMenu(null);   // sin menú: las teclas F llegan a la caja
   ventana.loadFile(path.join(__dirname, '..', 'interfaz', 'index.html'));
-  ventana.once('ready-to-show', () => { ventana.maximize(); ventana.show(); });
+  ventana.once('ready-to-show', () => {
+    marcar('ventana lista'); ventana.maximize(); ventana.show();
+    setTimeout(revisarBaseEnSegundoPlano, 1500);   // con la caja ya a la vista
+  });
 }
 
 /* ---------------- Impresión y actualizaciones ---------------- */
@@ -114,6 +160,11 @@ function configurarSistema() {
   // Solo la pantalla del POS puede usar estos canales
   const manejar = (canal, fn) => ipcMain.handle(canal, (e, ...a) => (seguridad.remitenteValido(e) ? fn(...a) : null));
   manejar('app:version', () => require('../package.json').version);
+  ipcMain.on('app:lista', (e) => {
+    if (!seguridad.remitenteValido(e)) return;
+    marcar('pantalla lista');
+    log.info('[arranque] ' + tiempos.map(([n, ms]) => n + ' ' + ms + ' ms').join(' · '));
+  });
 
   // Imprime el ticket (#zona-impresion) en la impresora predeterminada, sin diálogo.
   manejar('imprimir', () => new Promise((resolver) => {
@@ -165,7 +216,9 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     seguridad.alIniciar();
     const carpeta = app.getPath('userData');
+    marcar('electron listo');
     try { abrirBase(carpeta); } catch (e) { app.exit(1); return; }
+    marcar('base abierta');
     ipc.registrar({ ventana: () => ventana, estadoInicio, carpetaDatos: carpeta });
     iniciarHacienda();
     configurarSistema();

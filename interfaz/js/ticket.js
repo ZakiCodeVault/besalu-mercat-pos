@@ -69,7 +69,31 @@ function armarCierre(r) {
     fila('Ventas netas', money(r.ventas_netas), 'b'), el('hr'),
     fila('Fondo inicial', money(t.fondo), 'small'),
     fila('Efectivo esperado', money(t.esperado)), fila('Efectivo contado', money(t.contado)),
-    fila('Diferencia', (t.diferencia > 0 ? '+' : '') + money(t.diferencia), 'b')
+    fila('Diferencia', (t.diferencia > 0 ? '+' : '') + money(t.diferencia), 'b'),
+    // Un renglón por cajero (relevos): lo que recibió, lo esperado, lo contado y su diferencia
+    ...(r.tramos && r.tramos.length ? [el('hr'), el('div', { class: 'tc', style: 'font-weight:800', text: 'POR CAJERO' }),
+      ...r.tramos.flatMap((x) => [
+        el('div', { style: 'font-weight:700;margin-top:4px', text: x.tramo.usuario_nombre + ' · ' + horaDe(x.tramo.inicio) + '–' + horaDe(x.tramo.fin) }),
+        fila('Recibió', money(x.tramo.recibido), 'small'), fila('Ventas en efectivo', money(x.efectivo_neto), 'small'),
+        fila('Esperado / contado', money(x.tramo.esperado) + ' / ' + money(x.tramo.contado), 'small'),
+        fila('Diferencia', (x.tramo.diferencia > 0 ? '+' : '') + money(x.tramo.diferencia), 'small')])] : []),
+    t.cerrado_por_nombre ? fila('Cerró', t.cerrado_por_nombre, 'small') : null
+  ]);
+}
+const horaDe = (f) => (f ? String(f).slice(11, 16) : '…');
+
+/** Comprobante del relevo de cajero (sin cerrar la caja). */
+function armarRelevo(r) {
+  const s = r.saliente, t = s.tramo;
+  return el('div', { class: 'ticket' }, [
+    encabezadoNegocio(), el('hr'),
+    el('div', { class: 'tc', style: 'font-weight:800;font-size:13px', text: 'RELEVO DE CAJA · Turno #' + r.turno }),
+    fila('Entrega', t.usuario_nombre), fila('Recibe', t.entrega_a_nombre), fila('Hora', fechaHora(t.fin), 'small'), el('hr'),
+    fila('Recibió al empezar', money(t.recibido), 'small'), fila('Ventas', money(s.ventas), 'small'),
+    fila('Efectivo neto del tramo', money(s.efectivo_neto), 'small'),
+    fila('Efectivo esperado', money(t.esperado)), fila('Efectivo contado', money(t.contado)),
+    fila('Diferencia', (t.diferencia > 0 ? '+' : '') + money(t.diferencia), 'b'), el('hr'),
+    el('div', { class: 'tc small', text: 'Firma entrega ____________   Firma recibe ____________' })
   ]);
 }
 

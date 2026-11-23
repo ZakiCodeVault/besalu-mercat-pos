@@ -142,10 +142,10 @@ function registrarCompra(c) {
     const subtotal = lineas.reduce((s, l) => s + l.subtotal, 0);
     const impuesto = lineas.reduce((s, l) => s + l.impuesto, 0);
     const otros = entero(c.otros_cargos, 'otros cargos');
-    const r = d.prepare(`INSERT INTO compras(proveedor_id, tipo_documento, numero_documento, clave, fecha, subtotal, impuesto, otros_cargos, total, notas, xml_original, orden_id)
-                         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    const r = d.prepare(`INSERT INTO compras(proveedor_id, tipo_documento, numero_documento, clave, fecha, subtotal, impuesto, otros_cargos, total, notas, xml_original, orden_id, usuario_id)
+                         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(prov.id, c.tipo_documento || '01', numero, claveDoc || null, fecha, subtotal, impuesto, otros,
-           subtotal + impuesto + otros, String(c.notas || ''), c.xml_original || null, orden ? orden.id : null);
+           subtotal + impuesto + otros, String(c.notas || ''), c.xml_original || null, orden ? orden.id : null, require('./sesion').usuarioId());
     const compraId = Number(r.lastInsertRowid);
 
     const insL = d.prepare(`INSERT INTO compra_lineas(compra_id, linea, producto_id, orden_linea_id, descripcion, cantidad, costo_unitario, subtotal, tarifa_iva, impuesto, total_linea)

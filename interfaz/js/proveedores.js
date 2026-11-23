@@ -49,6 +49,9 @@ async function fichaProveedor(id) {
   const tipo = selector(TIPOS_ID, f.tipo_id);
   const ident = el('input', { value: f.identificacion, placeholder: 'Sin guiones' });
   if (f.usos) { tipo.disabled = true; ident.disabled = true; }
+  let tipoAMano = !!p;
+  tipo.addEventListener('change', () => { tipoAMano = true; });
+  ident.addEventListener('input', () => { const t = Patrones.tipoIdentificacion(ident.value); if (t && !tipoAMano) tipo.value = t; });
   const nombre = el('input', { value: f.nombre, placeholder: 'Como sale en la factura' });
   const comercial = el('input', { value: f.nombre_comercial, placeholder: 'Opcional' });
   const telefono = el('input', { value: f.telefono, inputmode: 'tel' });
@@ -188,6 +191,9 @@ function enlazarProveedor({ tipo, ident, nombre, proveedores, alCargar }) {
     return ficha;
   }
   ident.addEventListener('change', () => cargar(ident.value));
+  let tipoAMano = false;
+  tipo.addEventListener('change', () => { tipoAMano = true; });
+  ident.addEventListener('input', () => { const t = Patrones.tipoIdentificacion(ident.value); if (t && !tipoAMano) tipo.value = t; });
   nombre.addEventListener('change', () => {
     const t = nombre.value.trim().toLowerCase();
     const p = proveedores.find((x) => x.nombre.toLowerCase() === t);   // solo el nombre exacto (el de la lista)

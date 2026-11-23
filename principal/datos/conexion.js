@@ -7,6 +7,7 @@
  *   foreign_keys = ON      -> no puede haber líneas o movimientos huérfanos
  */
 const path = require('path');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const { MIGRACIONES } = require('./esquema');
 const { fechaLocal } = require('./montos');
@@ -44,8 +45,14 @@ let ruta = null;
 function abrir(carpeta) {
   ruta = path.join(carpeta, NOMBRE_ARCHIVO);
   db = new Database(ruta);
-  configurar(db);
-  migrar();
+  try {
+    configurar(db);
+    migrar();
+  } catch (e) {
+    try { db.close(); } catch (x) {}
+    db = null;
+    throw e;
+  }
   return ruta;
 }
 
@@ -56,20 +63,89 @@ function configurar(conexion) {
   conexion.pragma('busy_timeout = 5000');
 }
 
+/**
+ * Huella de los datos: por cada tabla, cuántas filas tiene y un resumen
+ * (SHA-256) de todas sus filas y columnas. Sirve para comprobar que una
+ * actualización del esquema no perdió ni cambió ningún dato existente.
+ * @param {object} [soloDe] huella anterior: compara solo esas tablas y columnas
+ * @param {object} [o] { soloLasQueHabia: true } cuenta solo las primeras filas que tenía cada tabla
+ *   (las que se agregaron después, como la anotación de la migración en la bitácora, no cuentan)
+ */
+function huellaDatos(conexion, soloDe, o = {}) {
+  const tablas = soloDe ? Object.keys(soloDe)
+    : conexion.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((t) => t.name);
+  const salida = {};
+  for (const t of tablas) {
+    const columnas = soloDe ? soloDe[t].columnas : conexion.prepare(`SELECT name FROM pragma_table_info('${t.replace(/'/g, "''")}')`).all().map((c) => c.name);
+    const lista = columnas.map((c) => '"' + c.replace(/"/g, '""') + '"').join(', ');
+    const h = crypto.createHash('sha256');
+    let filas = 0;
+    const limite = o.soloLasQueHabia && soloDe ? ' LIMIT ' + Number(soloDe[t].filas) : '';
+    for (const f of conexion.prepare(`SELECT ${lista} FROM "${t}" ORDER BY rowid${limite}`).raw().iterate()) {
+      h.update(JSON.stringify(f, (k, v) => (Buffer.isBuffer(v) ? 'b:' + v.toString('base64') : typeof v === 'bigint' ? String(v) : v)));
+      h.update('\n');
+      filas++;
+    }
+    salida[t] = { columnas, filas, huella: h.digest('hex') };
+  }
+  return salida;
+}
+
+/** Error al actualizar el esquema: los datos quedaron como estaban (nunca se ofrece reemplazarlos por un respaldo). */
+function errorDeMigracion(mensaje, copia) {
+  const e = new Error(mensaje);
+  e.codigo = 'MIGRACION';
+  e.copia = copia || null;
+  return e;
+}
+
+/**
+ * Actualiza el esquema de una base con datos sin arriesgar nada:
+ *  1. Copia completa al lado (antes-de-migrar-vN-…) y se verifica que la copia
+ *     abre, está sana y tiene las mismas filas que la base.
+ *  2. Todas las actualizaciones pendientes van en UNA sola transacción.
+ *  3. Antes de confirmarla se comprueba, tabla por tabla y columna por columna,
+ *     que ningún dato que ya existía se perdió o cambió, y que la base sigue
+ *     sana. Si algo no cuadra, se deshace todo y la base queda como estaba.
+ */
 function migrar() {
   const actual = db.pragma('user_version', { simple: true });
-  if (actual > 0 && actual < MIGRACIONES.length) {
-    // Base con datos que cambia de esquema: primero una copia completa al lado
-    const copia = path.join(path.dirname(ruta), 'antes-de-migrar-v' + actual + '-' + fechaLocal().replace(/[: ]/g, '-') + '.sqlite');
-    db.prepare('VACUUM INTO ?').run(copia);
+  if (actual > MIGRACIONES.length) throw errorDeMigracion('Esta base de datos es de una versión más nueva de la app (' + actual + '). Instale la versión más reciente.');
+  if (actual === MIGRACIONES.length) return;
+  let copia = null, antes = null;
+  if (actual > 0) {
+    antes = huellaDatos(db);
+    copia = path.join(path.dirname(ruta), 'antes-de-migrar-v' + actual + '-' + fechaLocal().replace(/[: ]/g, '-') + '.sqlite');
+    try {
+      db.prepare('VACUUM INTO ?').run(copia);
+      const c = new Database(copia, { readonly: true, fileMustExist: true });
+      try {
+        if (c.pragma('quick_check', { simple: true }) !== 'ok') throw new Error('la copia no quedó sana');
+        const h = huellaDatos(c, antes);
+        for (const t of Object.keys(antes)) if (h[t].huella !== antes[t].huella) throw new Error('la copia de la tabla ' + t + ' no es idéntica');
+      } finally { c.close(); }
+    } catch (e) {
+      throw errorDeMigracion('No se pudo hacer la copia de seguridad antes de actualizar la base (' + e.message + '). No se cambió nada: revise el espacio en disco.', copia);
+    }
   }
-  for (let v = actual; v < MIGRACIONES.length; v++) {
+  try {
     db.transaction(() => {
-      db.exec(MIGRACIONES[v]);
-      db.pragma('user_version = ' + (v + 1));
+      for (let v = actual; v < MIGRACIONES.length; v++) db.exec(MIGRACIONES[v]);
+      db.pragma('user_version = ' + MIGRACIONES.length);
+      if (antes) {
+        const despues = huellaDatos(db, antes);
+        for (const t of Object.keys(antes)) {
+          if (despues[t].filas !== antes[t].filas) throw new Error('la tabla ' + t + ' tenía ' + antes[t].filas + ' filas y quedaría con ' + despues[t].filas);
+          if (despues[t].huella !== antes[t].huella) throw new Error('cambiarían datos de la tabla ' + t);
+        }
+        if (db.pragma('foreign_key_check').length) throw new Error('quedarían registros huérfanos');
+      }
     })();
-    registrar('migracion', 'Esquema actualizado a la versión ' + (v + 1));
+  } catch (e) {
+    throw errorDeMigracion('No se pudo actualizar la base de datos a esta versión: ' + e.message + '. Sus datos quedaron exactamente como estaban.', copia);
   }
+  for (let v = actual; v < MIGRACIONES.length; v++) registrar('migracion', 'Esquema actualizado a la versión ' + (v + 1));
+  if (copia) registrar('migracion_verificada', { desde: actual, hasta: MIGRACIONES.length, copia: path.basename(copia), tablas: Object.keys(antes).length });
 }
 
 function obtener() {
@@ -121,8 +197,12 @@ function guardarAjustes(nuevos) {
 
 /* ---------- bitácora ---------- */
 function registrar(accion, detalle) {
-  obtener().prepare('INSERT INTO bitacora(fecha, accion, detalle) VALUES(?, ?, ?)')
-    .run(fechaLocal(), accion, typeof detalle === 'string' ? detalle : JSON.stringify(detalle || ''));
+  // Quién lo hizo (y quién lo autorizó, si fue con el PIN de un encargado)
+  const sesion = require('./sesion');
+  const u = sesion.usuario(), aut = sesion.autorizadoPor();
+  const quien = u ? u.nombre + (aut ? ' (autorizó ' + aut.nombre + ')' : '') : '';
+  obtener().prepare('INSERT INTO bitacora(fecha, accion, detalle, usuario) VALUES(?, ?, ?, ?)')
+    .run(fechaLocal(), accion, typeof detalle === 'string' ? detalle : JSON.stringify(detalle || ''), quien);
 }
 
 function leerBitacora(limite = 200) {
@@ -138,28 +218,7 @@ function leerBitacora(limite = 200) {
  *  - consecutivos: no faltan números
  */
 function verificarIntegridad() {
-  const d = obtener();
-  const problemas = [];
-  const integridad = d.pragma('integrity_check', { simple: true });
-  if (integridad !== 'ok') problemas.push('Archivo: ' + integridad);
-  const huerfanos = d.pragma('foreign_key_check');
-  if (huerfanos.length) problemas.push('Registros huérfanos: ' + huerfanos.length);
-  const descuadres = d.prepare(`
-    SELECT p.id, p.nombre, p.stock, round(coalesce(sum(m.cantidad), 0), 3) AS kardex
-    FROM productos p LEFT JOIN movimientos m ON m.producto_id = p.id
-    GROUP BY p.id HAVING abs(p.stock - kardex) > 0.0005`).all();
-  for (const x of descuadres) problemas.push('Stock de "' + x.nombre + '" (' + x.stock + ') no coincide con su kárdex (' + x.kardex + ')');
-  for (const s of d.prepare('SELECT tipo, ultimo FROM secuencias').all()) {
-    const n = d.prepare('SELECT count(*) AS n, coalesce(max(numero), 0) AS mx FROM comprobantes WHERE tipo = ?').get(s.tipo);
-    if (n.n !== s.ultimo || n.mx !== s.ultimo) problemas.push('Consecutivo ' + s.tipo + ': faltan números (' + n.n + ' de ' + s.ultimo + ')');
-  }
-  for (const s of d.prepare('SELECT tipo, ultimo FROM secuencias_receptor').all()) {
-    const n = d.prepare('SELECT count(*) AS n, coalesce(max(numero), 0) AS mx FROM mensajes_receptor WHERE tipo = ?').get(s.tipo);
-    if (n.n !== s.ultimo || n.mx !== s.ultimo) problemas.push('Consecutivo de mensajes ' + s.tipo + ': faltan números (' + n.n + ' de ' + s.ultimo + ')');
-  }
-  const oc = d.prepare('SELECT count(*) AS n, coalesce(max(numero), 0) AS mx FROM ordenes_compra WHERE numero IS NOT NULL').get();
-  if (oc.n !== oc.mx) problemas.push('Órdenes de compra: faltan números (' + oc.n + ' de ' + oc.mx + ')');
-  return { ok: problemas.length === 0, problemas, revisado: fechaLocal() };
+  return require('./revision').revisar(obtener(), fechaLocal());
 }
 
 /** Si el stock guardado no coincide con el kárdex, lo corrige (el kárdex manda). */
@@ -172,5 +231,5 @@ function repararStock() {
 
 module.exports = {
   NOMBRE_ARCHIVO, AJUSTES_BASE, abrir, configurar, obtener, rutaArchivo, cerrar,
-  leerConfig, escribirConfig, leerAjustes, guardarAjustes, registrar, leerBitacora, verificarIntegridad, repararStock
+  leerConfig, escribirConfig, leerAjustes, guardarAjustes, registrar, leerBitacora, verificarIntegridad, repararStock, huellaDatos
 };

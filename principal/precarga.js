@@ -9,13 +9,21 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 async function llamar(canal, ...args) {
   const r = await ipcRenderer.invoke(canal, ...args);
-  if (!r || !r.ok) throw new Error((r && r.error) || 'Error inesperado');
+  // Las marcas §permiso:…§ y §sesion§ le dicen a la pantalla que pida un PIN (los errores pierden
+  // sus propiedades al cruzar el puente, por eso van en el mensaje)
+  if (!r || !r.ok) throw new Error((r && r.permiso ? '§permiso:' + r.permiso + '§' : r && r.sesion ? '§sesion§' : '') + ((r && r.error) || 'Error inesperado'));
   return r.valor;
 }
 const c = (canal) => (...args) => llamar(canal, ...args);
 
 contextBridge.exposeInMainWorld('BESALU', {
   version: () => ipcRenderer.invoke('app:version'),
+  lista: () => ipcRenderer.send('app:lista'),
+  alRevisarBase: (cb) => {
+    const h = (_e, info) => { try { cb(info); } catch (e) {} };
+    ipcRenderer.on('integridad', h);
+    return () => ipcRenderer.removeListener('integridad', h);
+  },
   imprimir: () => ipcRenderer.invoke('imprimir'),
 
   sistema: {
@@ -41,6 +49,15 @@ contextBridge.exposeInMainWorld('BESALU', {
     datosMensaje: c('compras:datosMensaje'), responder: c('compras:responder'),
     reintentarMensaje: c('compras:reintentarMensaje'), guardarXmlMensaje: c('compras:guardarXmlMensaje')
   },
+  sesion: {
+    estado: c('sesion:estado'), crearPrimerAdmin: c('sesion:crearPrimerAdmin'), ingresar: c('sesion:ingresar'),
+    crearMiPin: c('sesion:crearMiPin'), salir: c('sesion:salir'), autorizar: c('sesion:autorizar'),
+    recuperar: c('sesion:recuperar'), cambiarMiPin: c('sesion:cambiarMiPin')
+  },
+  usuarios: {
+    listar: c('usuarios:listar'), crear: c('usuarios:crear'), actualizar: c('usuarios:actualizar'),
+    reiniciarPin: c('usuarios:reiniciarPin')
+  },
   marcas: { listar: c('marcas:listar'), guardar: c('marcas:guardar'), logo: c('marcas:logo'), eliminar: c('marcas:eliminar') },
   etiquetas: {
     config: c('etiquetas:config'), guardarConfig: c('etiquetas:guardarConfig'),
@@ -56,7 +73,8 @@ contextBridge.exposeInMainWorld('BESALU', {
   },
   caja: {
     actual: c('caja:actual'), abrir: c('caja:abrir'), resumen: c('caja:resumen'),
-    cerrar: c('caja:cerrar'), historial: c('caja:historial')
+    cerrar: c('caja:cerrar'), historial: c('caja:historial'),
+    tramo: c('caja:tramo'), resumenTramo: c('caja:resumenTramo'), relevo: c('caja:relevo')
   },
   reportes: {
     iva: c('reportes:iva'), balance: c('reportes:balance'), ventas: c('reportes:ventas'),

@@ -38,7 +38,7 @@ async function renderVentas() {
     const est = ESTADO_HACIENDA[c.estado_hacienda] || [c.estado_hacienda, ''];
     const nota = c.nota_credito ? 'Con nota de crédito' : c.sustituido_por ? 'Reemplazado por ' + Number(c.sustituido_por.slice(-10)) : c.sustituye_id ? 'Reemplazo' : '';
     tb.appendChild(el('tr', { class: 'clic' + (c.nota_credito || c.sustituido_por ? ' tachado' : ''), onclick: () => verComprobante(c.id) }, [
-      el('td', {}, [el('div', { style: 'font-weight:600', text: NOMBRE_TIPO[c.tipo] + ' ' + Number(c.consecutivo.slice(-10)) }), el('div', { class: 'mini', text: fechaHora(c.fecha_emision) })]),
+      el('td', {}, [el('div', { style: 'font-weight:600', text: NOMBRE_TIPO[c.tipo] + ' ' + Number(c.consecutivo.slice(-10)) }), el('div', { class: 'mini', text: fechaHora(c.fecha_emision) + (c.usuario_nombre ? ' · ' + c.usuario_nombre : '') })]),
       el('td', { class: 'mini', text: c.receptor_nombre || 'Consumidor final' }),
       el('td', {}, el('span', { class: 'pill', text: (MEDIOS[c.medio_pago] || [c.medio_pago])[0] })),
       el('td', { class: 'der mini', text: money(c.total_impuesto) }),
@@ -60,6 +60,7 @@ async function verComprobante(id) {
   abrirModal(el('div', { class: 'modal' }, [
     el('div', { class: 'card-t' }, [el('h2', { text: NOMBRE_TIPO[c.tipo] + ' ' + Number(c.consecutivo.slice(-10)) }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
     c.nota_credito ? el('div', { class: 'note', style: 'margin:0 0 12px', html: 'Anulada con la nota de crédito <b>' + c.nota_credito.consecutivo + '</b> · ' + c.nota_credito.referencia_razon }) : null,
+    c.usuario_nombre ? el('div', { class: 'mini', style: 'margin:-4px 0 10px', text: 'Hecho por ' + c.usuario_nombre + (c.autorizado_nombre ? ' · autorizó ' + c.autorizado_nombre : '') }) : null,
     el('div', { style: 'display:grid;place-items:center' }, armarComprobante(c)),
     seccionHacienda(c, (otro) => { cerrarModal(); renderVentas(); if (otro) verComprobante(otro); else verComprobante(c.id); }),
     el('div', { class: 'modal-acc' }, acciones)]));

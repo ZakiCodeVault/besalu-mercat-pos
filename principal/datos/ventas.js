@@ -9,6 +9,7 @@
  *  - Una venta no se modifica ni se borra: se corrige con nota de crédito.
  */
 const { obtener, registrar, leerAjustes } = require('./conexion');
+const sesion = require('./sesion');
 const { lineaVenta, validarCantidad, consecutivo, clave, fechaIso, fechaLocal } = require('./montos');
 
 const MEDIOS = ['efectivo', 'tarjeta', 'sinpe', 'transferencia', 'otro'];
@@ -26,6 +27,13 @@ function turnoAbierto(d) {
   return d.prepare('SELECT * FROM turnos WHERE cerrado_en IS NULL').get();
 }
 
+/** Quién emite (sesión), de quién es el efectivo (tramo abierto del turno) y quién autorizó. */
+function quienEmite(d, turnoId) {
+  const tramo = turnoId ? d.prepare('SELECT id FROM caja_tramos WHERE turno_id = ? AND fin IS NULL').get(turnoId) : null;
+  const aut = sesion.autorizadoPor();
+  return { usuario_id: sesion.usuarioId(), tramo_id: tramo ? tramo.id : null, autorizado_por: aut ? aut.id : null };
+}
+
 /** Reserva el siguiente número del consecutivo (dentro de la transacción). */
 function siguienteNumero(d, tipo) {
   d.prepare('UPDATE secuencias SET ultimo = ultimo + 1 WHERE tipo = ?').run(tipo);
@@ -37,11 +45,12 @@ function insertarComprobante(d, c) {
       tipo, numero, consecutivo, clave, fecha_emision, turno_id, medio_pago, condicion_venta,
       receptor_tipo_id, receptor_identificacion, receptor_nombre, receptor_correo,
       total_gravado, total_exento, total_venta, total_impuesto, total_comprobante,
-      pago, cambio, referencia_id, referencia_razon, sustituye_id)
+      pago, cambio, referencia_id, referencia_razon, sustituye_id, usuario_id, tramo_id, autorizado_por)
     VALUES(@tipo, @numero, @consecutivo, @clave, @fecha_emision, @turno_id, @medio_pago, '01',
       @receptor_tipo_id, @receptor_identificacion, @receptor_nombre, @receptor_correo,
       @total_gravado, @total_exento, @total_venta, @total_impuesto, @total_comprobante,
-      @pago, @cambio, @referencia_id, @referencia_razon, @sustituye_id)`).run(Object.assign({ sustituye_id: null }, c));
+      @pago, @cambio, @referencia_id, @referencia_razon, @sustituye_id, @usuario_id, @tramo_id, @autorizado_por)`)
+    .run(Object.assign({ sustituye_id: null }, c, quienEmite(d, c.turno_id)));
   return Number(r.lastInsertRowid);
 }
 
@@ -244,7 +253,8 @@ function reemitir(comprobanteId, cambios = {}) {
 
 function obtenerPorId(id) {
   const d = obtener();
-  const c = d.prepare('SELECT * FROM comprobantes WHERE id = ?').get(id);
+  const c = d.prepare(`SELECT c.*, u.nombre AS usuario_nombre, a.nombre AS autorizado_nombre FROM comprobantes c
+                       LEFT JOIN usuarios u ON u.id = c.usuario_id LEFT JOIN usuarios a ON a.id = c.autorizado_por WHERE c.id = ?`).get(id);
   if (!c) return null;
   c.tipo_nombre = TIPOS[c.tipo];
   c.lineas = d.prepare('SELECT * FROM comprobante_lineas WHERE comprobante_id = ? ORDER BY linea').all(id);
@@ -269,7 +279,8 @@ function listar({ desde, hasta, texto, tipo, limite = 300 } = {}) {
            c.total_comprobante, c.total_impuesto, c.estado_hacienda, c.referencia_id, c.sustituye_id, c.hacienda_mensaje,
            (SELECT s.consecutivo FROM comprobantes s WHERE s.sustituye_id = c.id) AS sustituido_por,
            (SELECT count(*) FROM comprobante_lineas l WHERE l.comprobante_id = c.id) AS lineas,
-           (SELECT nc.consecutivo FROM comprobantes nc WHERE nc.tipo = '03' AND nc.referencia_id = c.id ORDER BY nc.id DESC) AS nota_credito
+           (SELECT nc.consecutivo FROM comprobantes nc WHERE nc.tipo = '03' AND nc.referencia_id = c.id ORDER BY nc.id DESC) AS nota_credito,
+           (SELECT u.nombre FROM usuarios u WHERE u.id = c.usuario_id) AS usuario_nombre
     FROM comprobantes c ${cond.length ? 'WHERE ' + cond.join(' AND ') : ''}
     ORDER BY c.id DESC LIMIT @limite`).all(par);
 }

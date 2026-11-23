@@ -20,6 +20,7 @@ async function renderAjustes() {
   f.provincia = selector([['', 'Elegir…'], ...PROVINCIAS], a.provincia || '');
 
   const g = el('div', { class: 'cfg-grid' });
+  if (puedo('usuarios')) { const u = await tarjetaUsuarios(); if (u) g.appendChild(u); }
   App.hacienda = estado.hacienda; pintarIndicadorHacienda();
   g.appendChild(tarjetaHacienda(estado.hacienda, renderAjustes));
   g.appendChild(tarjetaCorreo(estado.hacienda.correo, renderAjustes));
@@ -64,9 +65,9 @@ async function renderAjustes() {
         el('button', { class: 'btn btn--ghost btn--sm', onclick: exportarTodoExcel }, [icon('download', 15), 'Exportar todo a Excel…'])])])]));
 
   /* ---- integridad y otros ---- */
-  const integ = estado.integridad;
+  const integ = estado.integridad || App.integridad;   // al abrir se revisa aparte: puede estar todavía en curso
   g.appendChild(el('div', { class: 'card glass' }, [el('h2', { text: 'Integridad y auditoría' }),
-    fila('Verificación al abrir', el('span', { class: 'pill ' + (integ && integ.ok ? 'pill--green' : 'pill--red'), text: integ && integ.ok ? 'Todo en orden' : 'Revisar' })),
+    fila('Verificación al abrir', el('span', { class: 'pill ' + (!integ ? '' : integ.ok ? 'pill--green' : 'pill--red'), text: !integ ? 'Revisando…' : integ.ok ? 'Todo en orden' : 'Revisar' })),
     integ && !integ.ok ? el('div', { class: 'note', style: 'background:var(--neg-soft)', text: integ.problemas.join(' · ') }) : null,
     el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px' }, [
       el('button', { class: 'btn btn--ghost btn--sm', onclick: verificarAhora }, [icon('shield', 15), 'Verificar ahora']),
@@ -152,4 +153,52 @@ async function importarV1() {
 function imprimirPrueba() {
   imprimir(el('div', { class: 'ticket' }, [encabezadoNegocio(), el('hr'), el('div', { class: 'tc', style: 'font-weight:800', text: 'TICKET DE PRUEBA' }),
     el('div', { class: 'tc small', text: new Date().toLocaleString('es-CR') }), el('hr'), el('div', { class: 'tc small', text: 'Si lee esto, la impresora funciona.' })]));
+}
+
+/* ---------------- Usuarios (solo administrador) ---------------- */
+async function tarjetaUsuarios() {
+  const lista = await intentar(() => BESALU.usuarios.listar());
+  if (!lista) return null;
+  const tb = el('tbody', {}, lista.map((u) => el('tr', { class: u.activo ? '' : 'tachado' }, [
+    el('td', {}, el('div', { style: 'display:flex;align-items:center;gap:10px' }, [el('span', { class: 'avatar avatar--' + u.rol, style: 'width:32px;height:32px;font-size:12px', text: iniciales(u.nombre) }),
+      el('div', {}, [el('div', { style: 'font-weight:600', text: u.nombre }), el('div', { class: 'mini', text: u.correo || 'sin correo' })])])),
+    el('td', {}, el('span', { class: 'pill ' + (u.rol === 'admin' ? 'pill--ink' : u.rol === 'encargado' ? 'pill--accent' : ''), text: u.rol_nombre })),
+    el('td', {}, u.tiene_pin ? el('span', { class: 'mini', text: u.ultimo_ingreso ? 'Entró ' + fechaHora(u.ultimo_ingreso) : 'Con PIN' }) : el('span', { class: 'pill pill--amber', text: 'Debe crear su PIN' })),
+    el('td', { class: 'der' }, el('button', { class: 'icon-btn', title: 'Editar', onclick: () => editarUsuario(u) }, icon('pencil', 17)))])));
+  return el('div', { class: 'card glass', 'data-usuarios': '' }, [
+    el('div', { class: 'card-t' }, [el('h2', { text: 'Usuarios' }), el('button', { class: 'btn btn--accent btn--sm', onclick: () => editarUsuario(null) }, [icon('plus', 15), 'Nuevo usuario'])]),
+    el('div', { class: 'tabla-wrap', style: 'border:1px solid var(--line)' }, el('table', {}, [el('thead', {}, el('tr', {}, ['Usuario', 'Rol', 'PIN', ''].map((t) => el('th', { text: t })))), tb])),
+    el('div', { class: 'note', html: '<b>Administrador</b>: todo. <b>Encargado</b>: vende, devuelve, compras, inventario, reportes y cierra la caja. ' +
+      '<b>Vendedor</b>: vende, relevo de caja y etiquetas (lo demás, con la autorización de un encargado). Cada persona crea su PIN la primera vez que entra.' })]);
+}
+
+function editarUsuario(u) {
+  const nuevo = !u;
+  const nombre = el('input', { value: u ? u.nombre : '', maxlength: 60, placeholder: 'Ej.: Vendedor 1' });
+  const correo = el('input', { type: 'email', value: u ? u.correo : '', placeholder: 'Opcional' });
+  const rol = selector([['cajero', 'Vendedor'], ['encargado', 'Encargado'], ['admin', 'Administrador']], u ? u.rol : 'cajero');
+  const activo = el('input', { type: 'checkbox' }); activo.checked = !u || !!u.activo;
+  const guardar = async () => {
+    const datos = { nombre: nombre.value, correo: correo.value, rol: rol.value };
+    const r = await intentar(() => (nuevo ? BESALU.usuarios.crear(datos) : BESALU.usuarios.actualizar(u.id, Object.assign(datos, { activo: activo.checked }))), 'No se guardó el usuario');
+    if (!r) return;
+    cerrarModal();
+    toast(nuevo ? 'Usuario creado' : 'Usuario guardado', 'ok', nuevo ? r.nombre + ' crea su PIN la primera vez que entre' : r.nombre);
+    if (Sesion.usuario && r.id === Sesion.usuario.id) { Sesion.usuario = Object.assign(Sesion.usuario, r, { permisos: Sesion.usuario.permisos }); pintarUsuario(); }
+    renderAjustes();
+  };
+  const reiniciar = async () => {
+    if (!(await confirmar('Reiniciar PIN', u.nombre + ' va a crear un PIN nuevo la próxima vez que entre. Úselo si lo olvidó.', { aceptar: 'Reiniciar PIN' }))) return;
+    if (await intentar(() => BESALU.usuarios.reiniciarPin(u.id), 'No se pudo')) { cerrarModal(); toast('PIN reiniciado', 'ok', u.nombre + ' crea uno nuevo al entrar'); renderAjustes(); }
+  };
+  abrirModal(el('div', { class: 'modal narrow', 'data-editar-usuario': u ? String(u.id) : 'nuevo' }, [
+    el('div', { class: 'card-t' }, [el('h2', { text: nuevo ? 'Nuevo usuario' : u.nombre }), el('button', { class: 'icon-btn', onclick: cerrarModal }, icon('x', 18))]),
+    campo('Nombre', nombre), campo('Correo', correo), campo('Rol', rol),
+    nuevo ? el('div', { class: 'note', text: 'No hace falta poner PIN: la persona lo crea la primera vez que entra a su perfil.' })
+      : el('label', { class: 'chk', style: 'margin:6px 0' }, [activo, 'Activo (puede entrar)']),
+    el('div', { class: 'modal-acc' }, [
+      u && u.tiene_pin ? el('button', { class: 'btn btn--ghost', style: 'margin-right:auto', onclick: reiniciar }, 'Reiniciar PIN') : null,
+      el('button', { class: 'btn btn--ghost', onclick: cerrarModal }, 'Cancelar'),
+      el('button', { class: 'btn btn--accent', onclick: guardar }, nuevo ? 'Crear usuario' : 'Guardar')])
+  ]));
 }

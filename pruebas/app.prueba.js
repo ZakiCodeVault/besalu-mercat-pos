@@ -84,7 +84,7 @@ const AYUDAS = `
 
 async function esperarLista() {
   for (let i = 0; i < 200; i++) {
-    try { if (await js("typeof App!=='undefined' && !document.getElementById('app').hidden && App.catalogo !== undefined")) return true; } catch (e) {}
+    try { if (await js("typeof App!=='undefined' && (!document.getElementById('app').hidden || !document.getElementById('ingreso').hidden) && App.catalogo !== undefined")) return true; } catch (e) {}
     await esperar(50);
   }
   return false;
@@ -95,7 +95,10 @@ async function captura(nombre) {
   if (!dir) return;
   await js(`document.querySelectorAll('.toast').forEach((t) => t.remove()); true`);   // los avisos taparían la pantalla
   await esperar(350);
-  fs.writeFileSync(path.join(dir, nombre + '.png'), (await ventana.webContents.capturePage()).toPNG());
+  // Las capturas son solo para revisar a ojo: si una falla, la prueba sigue
+  for (let i = 0; i < 3; i++) {
+    try { fs.writeFileSync(path.join(dir, nombre + '.png'), (await ventana.webContents.capturePage()).toPNG()); return; } catch (e) { await esperar(300); }
+  }
 }
 /** Espera a que una condición de la pantalla se cumpla (o se rinde y sigue: la verificación dirá qué falló). */
 async function hasta(codigo, intentos = 80) {
@@ -134,7 +137,17 @@ async function correr() {
   const t0 = Date.now();
   verificar('La app abre', await esperarLista(), (Date.now() - t0) + ' ms');
   await js(AYUDAS);
-  verificar('Sin cédula, abre en Ajustes para configurar', await js("App.vista === 'ajustes' && !App.ajustes.cedula"));
+  // ---- Versión 5: primero se crea el administrador (cada persona entra con usuario y PIN) ----
+  verificar('Primera vez: pide crear el administrador antes de usar la app', await hasta(`document.getElementById('app').hidden && document.querySelector('#ingreso h2').textContent.includes('versión 5')`));
+  await captura('00-crear-administrador');
+  await js(`const c = document.getElementById('ingreso'); __escribir(__campo('Correo', c), 'admin@besalu.cr');
+    __escribir(__campo('PIN del administrador', c), '2580'); __escribir(__campo('Repita el PIN', c), '2580'); __boton('Crear administrador', c).click(); true`);
+  await hasta(`!!document.querySelector('[data-codigo-recuperacion]')`);
+  const codigoRec = await js(`document.querySelector('.codigo-rec').textContent`);
+  await js(`__boton('Ya lo guardé', __modal()).click(); true`);
+  await hasta(`!document.getElementById('app').hidden && !!Sesion.usuario`);
+  verificar('Crea el administrador, muestra el código de recuperación una vez y entra', /^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(codigoRec) && await js("Sesion.usuario.rol === 'admin' && Sesion.usuario.permisos.includes('usuarios')"), codigoRec.slice(0, 4) + '-…');
+  verificar('Sin cédula, abre en Ajustes para configurar', await hasta("App.vista === 'ajustes' && !App.ajustes.cedula"));
   verificar('Aviso de actualización oculto', await js("getComputedStyle(document.getElementById('upd')).display === 'none'"));
 
   // ---- Configurar negocio ----
@@ -539,6 +552,83 @@ async function correr() {
   verificar('Etiqueta "Producto con marca" desde Inventario: llega a la impresora en TSPL (50 × 25 mm, 3 copias)', vistaEtq.plantilla === 'marca' && vistaEtq.filas === 1 &&
     txt.startsWith('SIZE 50 mm,25 mm\r\n') && iBmp > 0 && txt.includes('PRINT 1,3') && negros > 3000 && negros < 50000, enviado.length + ' bytes · ' + negros + ' puntos negros');
   await js('while (hayModal()) cerrarModal(); true');
+
+  // ---- Usuarios: vendedores con su PIN, permisos, autorización y relevo de caja ----
+  const ponerPin = (v, raiz) => js(`const i = document.querySelector('${raiz} .pin-input'); i.value = '${v}'; i.dispatchEvent(new Event('input')); __enter(i); true`);
+  await js(`while (hayModal()) cerrarModal(); go('ajustes'); true`); await hasta(`!!document.querySelector('[data-usuarios]')`);
+  for (const n of ['Vendedor 1', 'Vendedor 2']) {
+    await js(`__boton('Nuevo usuario', document.querySelector('[data-usuarios]')).click(); true`); await tituloModal('Nuevo usuario');
+    await js(`const m = __modal(); __escribir(__campo('Nombre', m), '${n}'); __escribir(__campo('Correo', m), '${n.replace(' ', '').toLowerCase()}@correo.cr'); __boton('Crear usuario', m).click(); true`);
+    await hasta(`!document.querySelector('[data-editar-usuario]') && !!document.querySelector('[data-usuarios]') && document.querySelector('[data-usuarios]').textContent.includes('${n}')`);
+  }
+  const lista = await js(`(async () => (await BESALU.usuarios.listar()).map(u => [u.nombre, u.rol, u.tiene_pin]))()`);
+  verificar('El administrador crea los vendedores (sin PIN: cada uno crea el suyo)', lista.length === 3 && lista.filter((u) => u[1] === 'cajero' && u[2] === 0).length === 2, lista.map((u) => u[0]).join(', '));
+  await js(`(async () => { if (!App.turno) await BESALU.caja.abrir(1000000);
+    const p = App.catalogo.find(x => x.codigo === '7441001100118'); await BESALU.productos.ajustar(p.id, 50, 'Conteo físico'); await App.reiniciarEstado(); })(); true`); await esperar(400);
+
+  await js(`salir(); true`);
+  await hasta(`!document.getElementById('ingreso').hidden && document.querySelectorAll('#ingreso .perfil').length === 3`);
+  await captura('13-ingreso');
+  await js(`[...document.querySelectorAll('#ingreso .perfil')].find(b => b.textContent.includes('Vendedor 1')).click(); true`);
+  await hasta(`document.querySelector('#ingreso h2').textContent === 'Cree su PIN'`);
+  await ponerPin('4826', '#ingreso'); await hasta(`document.querySelector('#ingreso h2').textContent === 'Repita su PIN'`);
+  await ponerPin('4826', '#ingreso');
+  await hasta(`!document.getElementById('app').hidden && !!Sesion.usuario && Sesion.usuario.nombre === 'Vendedor 1'`);
+  const nav = await js(`[...document.querySelectorAll('#nav .nav-btn')].map(b => b.dataset.v)`);
+  verificar('El vendedor crea su PIN al entrar y solo ve lo que le toca', JSON.stringify(nav) === JSON.stringify(['caja', 'ventas', 'inventario', 'etiquetas', 'cierre']), nav.join(', '));
+  const bloqueos = await js(`(async () => { const r = {}; for (const [k, f] of [['ajustes', () => BESALU.ajustes ? BESALU.ajustes.guardar({}) : BESALU.sistema.estado()], ['reportes', () => BESALU.reportes.iva('2026-01-01', '2026-12-31')], ['usuarios', () => BESALU.usuarios.listar()]]) {
+    try { await f(); r[k] = 'pasó'; } catch (e) { r[k] = e.message.slice(0, 20); } } return r; })()`);
+  verificar('El sistema le niega al vendedor reportes y usuarios aunque los pida directo', /§permiso:reportes§/.test(bloqueos.reportes) && /§permiso:usuarios§/.test(bloqueos.usuarios), JSON.stringify(bloqueos));
+
+  await js(`(async () => { const p = App.catalogo.find(x => x.codigo === '7441001100118'); window.__v = await BESALU.ventas.emitir({ lineas: [{ producto_id: p.id, cantidad: 1 }], medio_pago: 'efectivo', pago: 200000 }); })(); true`);
+  await hasta(`!!window.__v`);
+  const directo = await js(`(async () => { try { await BESALU.ventas.notaCredito(window.__v.id, 'directo'); return 'pasó'; } catch (e) { return e.message; } })()`);
+  await js(`go('ventas'); verComprobante(window.__v.id); true`); await hasta(`!!__modal() && !!__boton('Nota de crédito', __modal())`);
+  await js(`__boton('Nota de crédito', __modal()).click(); true`); await tituloModal('Nota de crédito');
+  await js(`__escribir(__modal().querySelector('input'), 'Cliente devolvió'); __boton('Emitir nota de crédito', __modal()).click(); true`);
+  await hasta(`!!document.querySelector('[data-autorizacion="devolver"]')`);
+  await captura('14-autorizacion');
+  await ponerPin('2580', '[data-autorizacion]');
+  await hasta(`(async () => { const v = await BESALU.ventas.obtener(window.__v.id); return !!v.nota_credito; })()`);
+  const ncVend = await js(`(async () => { const v = await BESALU.ventas.obtener(window.__v.id); const n = await BESALU.ventas.obtener(v.nota_credito.id); return [n.usuario_nombre, n.autorizado_nombre]; })()`);
+  verificar('Devolución del vendedor: el sistema la niega y el administrador la autoriza con su PIN', directo.startsWith('§permiso:devolver§') && ncVend[0] === 'Vendedor 1' && ncVend[1] === 'Administración', ncVend.join(' · autorizó '));
+  await js('while (hayModal()) cerrarModal(); true');
+
+  // Relevo: la caja la abrió el administrador; Vendedor 1 la recibe contando el efectivo
+  const tramo1 = await js(`(async () => { const t = await BESALU.caja.tramo(); return await BESALU.caja.resumenTramo(t.id); })()`);
+  await js(`menuUsuario(); true`); await hasta(`!!__boton('Relevo de caja', __modal())`);
+  await js(`__boton('Relevo de caja', __modal()).click(); true`); await hasta(`!!document.querySelector('[data-relevo]')`);
+  await js(`const m = document.querySelector('[data-relevo]'); __escribir(m.querySelector('.monto-grande'), '${tramo1.efectivo_esperado / 100 - 50}');
+    [...m.querySelectorAll('.perfil')].find(b => b.textContent.includes('Vendedor 1')).click(); true`);
+  await captura('15-relevo');
+  await ponerPin('4826', '[data-relevo]');
+  await tituloModal('Relevo hecho');
+  await js(`__boton('Listo', __modal()).click(); true`); await esperar(300);
+  const trasRelevo = await js(`(async () => { const t = await BESALU.caja.tramo(); const r = await BESALU.caja.resumen(); return { a: t.usuario_nombre, recibido: t.recibido, tramos: r.tramos.length, dif: r.tramos[0].tramo.diferencia, entrega: r.tramos[0].tramo.entrega_a_nombre }; })()`);
+  verificar('Relevo: el que entrega cuenta, el que recibe pone su PIN y empieza con lo contado (sin cerrar la caja)',
+    trasRelevo.a === 'Vendedor 1' && trasRelevo.recibido === tramo1.efectivo_esperado - 5000 && trasRelevo.tramos === 2 && trasRelevo.dif === -5000 && trasRelevo.entrega === 'Vendedor 1',
+    'faltaron ₡50 · ' + trasRelevo.a + ' recibe ' + trasRelevo.recibido / 100);
+
+  // Cierre: el vendedor no puede cerrar solo; el administrador lo autoriza y el Z trae los dos tramos
+  await js(`go('cierre'); true`); await hasta(`!!document.querySelector('#v-cierre .card') && document.getElementById('v-cierre').textContent.includes('Cajeros del turno')`);
+  await captura('16-cierre-cajeros');
+  const esperadoTurno = await js(`(async () => (await BESALU.caja.resumen()).efectivo_esperado)()`);
+  await js(`const v = document.getElementById('v-cierre'); __escribir(__campo('Efectivo contado en caja (₡)', v), '${(esperadoTurno - 5000) / 100}'); __boton('Cerrar caja', v).click(); true`);
+  await tituloModal('Cerrar caja'); await js(`__boton('Cerrar caja', __modal()).click(); true`);
+  await hasta(`!!document.querySelector('[data-autorizacion="cerrar_caja"]')`);
+  await ponerPin('2580', '[data-autorizacion]');
+  await hasta(`!App.turno`);
+  const z = await js(`(async () => { const h = (await BESALU.caja.historial())[0]; const r = await BESALU.caja.resumen(h.id); return { dif: r.turno.diferencia, tramos: r.tramos.map(t => [t.tramo.usuario_nombre, t.tramo.diferencia]), cerro: r.turno.cerrado_por_nombre }; })()`);
+  verificar('Cierre Z autorizado por el administrador, con la diferencia de cada cajero', z.tramos.length === 2 && z.dif === -5000 && z.tramos[0][1] + z.tramos[1][1] === z.dif && z.cerro === 'Vendedor 1',
+    z.tramos.map((t) => t[0] + ' ' + t[1] / 100).join(' · '));
+
+  // De vuelta al administrador para el resto de la prueba
+  await js(`salir(); true`); await hasta(`!document.getElementById('ingreso').hidden && document.querySelectorAll('#ingreso .perfil').length === 3`);
+  await js(`[...document.querySelectorAll('#ingreso .perfil')].find(b => b.textContent.includes('Administración')).click(); true`);
+  await hasta(`document.querySelector('#ingreso h2').textContent === 'Ponga su PIN'`);
+  await ponerPin('0000', '#ingreso'); await hasta(`document.querySelector('#ingreso .pin-error').textContent.includes('incorrecto')`);
+  await ponerPin('2580', '#ingreso');
+  verificar('PIN equivocado no entra; con el correcto vuelve el administrador', await hasta(`!document.getElementById('app').hidden && Sesion.usuario.rol === 'admin'`));
 
   // ---- Seguridad de la pantalla ----
   const aislada = await js("({ process: typeof process, buffer: typeof Buffer, global: typeof global, abrir: window.open('https://example.com') === null })");
